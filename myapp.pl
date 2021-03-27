@@ -474,8 +474,12 @@ function searchType() {
   }
 }
 </script>
+
+<div style="position: fixed; top: 0; width: 100%; padding: 5px; margin-bottom: 25px;">
 <input type="text" id="searchType" onkeyup="searchType()" placeholder="Search for type..">
 <input type="text" id="searchOracle" onkeyup="searchOracle()" placeholder="Search for oracle..">
+</div>
+<div style="padding-top: 25px;">
 <table id="collectionTable" style="width:100%">
     <tr>
         <th scope="col">Image</th>
@@ -487,3 +491,4 @@ function searchType() {
     <tbody>
     </tbody>
 </table>
+</div>
