@@ -1,6 +1,7 @@
 #!/usr/bin/env perl
 use Mojolicious::Lite -signatures;
 use lib qw(lib);
+use MyApp::Model::Users;
 
 use MIME::Base64;
 use Mojo::UserAgent;
