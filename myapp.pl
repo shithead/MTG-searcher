@@ -2,11 +2,14 @@
 use Mojolicious::Lite -signatures;
 use lib qw(lib);
 use MyApp::Model::Users;
-
+#$r->get('/register')->to(
+#    controller => 'RegistrationController', action => 'register'
+#);
 use MIME::Base64;
 use Mojo::UserAgent;
 use Mojo::JSON qw(decode_json encode_json);
 use Text::CSV;
+use Crypt::PBKDF2;
 
 use DBI;
 
@@ -53,9 +56,7 @@ helper dbcreate => sub {
       foreach my $table (values @{$schema->{$key}}) {
         my $path = Mojo::File->new($key.'_' . $table . '.sql');
         my $stmt = $path->slurp;
-        p $stmt        ;
         foreach (split(/;/, $stmt)) {
-          p $_;
           $rv = $dbh->do($_.";");
           if($rv lt 0) {
             #Var DBI::errstr ist in diesem Kontext unbekannt
@@ -88,8 +89,9 @@ helper get_data => sub {
 helper get_id => sub {
   my $c = shift;
   my $name = shift;
+  my $table = shift;
 
-  my $sth = $dbh->prepare("SELECT ID FROM mtg WHERE Name == '$name';");
+  my $sth = $dbh->prepare("SELECT ID FROM $table WHERE Name == '$name';");
   $sth->execute or die $DBI::errstr;
   my $nameid = $sth->fetch();
   return @{$nameid}[0] if (defined $nameid);
@@ -102,11 +104,24 @@ helper insert_collection => sub {
   my $edition = shift;
   my $price = shift;
   my $cardnumber = shift;
+  
   my $sth = $dbh->prepare("INSERT INTO mtg (Name, Edition, Preis, CardNumber) VALUES( '$name', '$edition', '$price', '$cardnumber');");
   my $ret = $sth->execute or say $DBI::errstr;
   return undef if (not defined $ret or $ret eq "E0E");
 
-  return $c->get_id($name);
+  return $c->get_id($name, "mtg");
+};
+
+helper insert_users => sub {
+  my $c = shift;
+  my $name = shift;
+  my $password = shift;
+  
+  my $sth = $dbh->prepare("INSERT INTO users (Name, Password) VALUES( '$name', '$password');");
+  my $ret = $sth->execute or say $DBI::errstr;
+  return undef if (not defined $ret or $ret eq "E0E");
+
+  return $c->get_id($name, "users");
 };
 
 helper update_scraped => sub {
@@ -116,6 +131,7 @@ helper update_scraped => sub {
   my $mana_costs = shift;
   my $image = shift;
   my $type = shift;
+
   my $sth = $dbh->prepare("UPDATE mtg SET Oracle='$oracle', ManaCost='$mana_costs', Image='$image', Type='$type' WHERE ID=='$id';");
   my $ret = $sth->execute or say $DBI::errstr;
   return undef if (not defined $ret or $ret eq "E0E");
@@ -168,6 +184,82 @@ get '/scrape/scryfall' => sub ($c) {
   }
   $c->redirect_to('watch');
 };
+
+
+get '/register' => sub($c) {
+  $c->render(
+    template => 'register',
+    error    => $c->flash('error'),
+    message  => $c->flash('message')
+  );
+};
+
+post '/register' => sub($c) {
+  my $username = $c->param('username');
+  my $password = $c->param('password');
+  my $confirm_password = $c->param('confirm_password');
+
+  if (! $username || ! $password || ! $confirm_password ) {
+    $c->flash( error => 'Username, Password are the mandatory fields.');
+    $c->redirect_to('register');
+  }
+
+  if ($password ne $confirm_password) {
+    $c->flash( error => 'Password and Confirm Password must be same.');
+    $c->redirect_to('register');
+  }
+
+  #my $dbh = $c->app->{_dbh}; # TODO implement this
+
+  my $users = $c->get_data("SELECT ID FROM users WHERE Name='$username';");
+
+  p $users;
+  if ( defined $users and ! keys %{$users}  ) {
+    eval {
+      $c->insert_users($username, generate_password($password) )
+      #      $dbh->resultset('User')->create({ 
+      #          Name       => $username,
+      #          Password    => generate_password($password),
+      #          status      => 1
+      #        });
+    };
+    p $@;
+    if ($@) {
+      $c->flash( error => 'Error in db query. Please check mysql logs.');
+      $c->redirect_to('register');
+    }
+    else {
+      $c->flash( message => 'User added to the database successfully.');
+      $c->redirect_to('register');
+    }
+  }
+  else {
+    $c->flash( error => 'Username already exists.');
+    $c->redirect_to('register');
+  }
+};
+
+sub generate_password {
+  my $password = shift;
+
+  my $pbkdf2 = Crypt::PBKDF2->new(
+    hash_class => 'HMACSHA1', 
+    iterations => 1000,       
+    output_len => 20,         
+    salt_len   => 4,         
+  );
+
+  return $pbkdf2->generate($password);
+};
+
+get '/login' =>  sub($c) {
+  $c->render(template => 'login');
+};
+
+group {
+  under 'user';
+};
+
 
 group {
   under 'collection';
@@ -341,8 +433,6 @@ __DATA__
 % layout 'default';
 % title 'Imports';
 
-
-
 @@ index.html.ep
 % layout 'default';
 % title 'Welcome to Magic the Gathering Card search';
@@ -361,15 +451,64 @@ __DATA__
 <body><%= content %></body>
 </html>
 
-@@ login.html.ep
+@@ register.html.ep
 % layout 'default';
+% title 'Register';
+<br /> <br />
+<div class="container">
+    <div class="card col-sm-6 mx-auto">
+        <div class="card-header text-center">
+            User Registration Form
+        </div>
+        <br /> <br />
+        <form method="post" action='/register'>
+            <input class="form-control" 
+                   id="username" 
+                   name="username" 
+                   type="username" size="40"
+                   placeholder="Enter Username" 
+             />
+            <br /> <br />
+            <input class="form-control" 
+                   id="password" 
+                   name="password" 
+                   type="password" 
+                   size="40" 
+                   placeholder="Enter Password" 
+             />   
+            <br /> <br />
+            <input class="form-control" 
+                   id="confirm_password" 
+                   name="confirm_password" 
+                   type="password" 
+                   size="40" 
+                   placeholder="Confirm Password" 
+             />   
+            <br /> <br />
+            <input class="btn btn-primary" type="submit" value="Register">
+            <br />  <br />
+        </form>
+      % if ($error) {
+            <div class="error" style="color: red">
+                <small> <%= $error %> </small>
+            </div>
+        %}
+
+        % if ($message) {
+            <div class="error" style="color: green">
+                <small> <%= $message %> </small>
+            </div>
+        %}
+    </div>
+
+</div>
 
 @@ form.html.ep
 % layout 'default';
 % title 'Upload your Collection';
 %= form_for upload => (enctype => 'multipart/form-data') => begin
-%= file_field 'collection'
-%= submit_button 'Upload'
+  %= file_field 'collection'
+  %= submit_button 'Upload'
 % end
 
 @@ watch.html.ep
