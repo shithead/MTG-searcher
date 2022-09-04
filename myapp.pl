@@ -270,33 +270,42 @@ group {
     # Process uploaded file
     return $c->redirect_to('form') unless my $collection = $c->param('collection');
 
-    my $csv = Text::CSV->new({ sep_char => ',' });
-    my $sum = 0;
-    my $matrix = {};
-    my @lines = split('\n', $collection->slurp);
-    foreach my $line (@lines) {
-      chomp($line);
-      if ($csv->parse($line)) {
 
-        my @fields = $csv->fields();
-        push(@{$matrix->{$sum}}, $csv->fields());
-        $matrix->{$sum}[2] =~ s/'/''/;
-        $matrix->{$sum}[3] =~ s/'/''/;
-      } else {
-        warn "Line could not be parsed: $line\n";
-      }
-      # export to extra route
-      if ($sum gt 0) {
-        $c->insert_collection(
-          $matrix->{$sum}[2],
-          $matrix->{$sum}[3],
-          $matrix->{$sum}[13],
-          $matrix->{$sum}[4]
-        );
-      }
-      $sum += 1;
-    }
-    $c->render(json => $matrix);
+    ## XXX BEGIN OF long operation time
+    Mojo::IOLoop->subprocess->run_p(sub ($){
+        my $csv = Text::CSV->new({ sep_char => ',' });
+        my $sum = 0;
+        my $matrix = {};
+        my @lines = split('\n', $collection->slurp);
+        foreach my $line (@lines) {
+          chomp($line);
+          if ($csv->parse($line)) {
+
+            my @fields = $csv->fields();
+            push(@{$matrix->{$sum}}, $csv->fields());
+            $matrix->{$sum}[2] =~ s/'/''/;
+            $matrix->{$sum}[3] =~ s/'/''/;
+          } else {
+            warn "Line could not be parsed: $line\n";
+          }
+          # export to extra route
+          if ($sum gt 0) {
+            my $rv = $c->insert_collection(
+              $matrix->{$sum}[2],
+              $matrix->{$sum}[3],
+              $matrix->{$sum}[13],
+              $matrix->{$sum}[4]
+            );
+            print "insert number: $sum, ID: $rv\n";
+          }
+          $sum += 1;
+        }
+        return $matrix;
+      })->then(sub ($matrix) {
+        $c->render(json => $matrix);
+      })->catch(sub ($err) {
+        $c->render(text => $err);
+      })->wait;
   };
 };
 
@@ -506,6 +515,17 @@ __DATA__
   %= file_field 'collection'
   %= submit_button 'Upload'
 % end
+
+@@ progress_collection_import.html.ep
+% layout 'default';
+% title 'Progress of your Collection import';
+<h1> 'Progress of your Collection import' <h1>
+% if ($message) {
+  <div class="error" style="color: green">
+    <small> <%= $message %> </small>
+  </div>
+%}
+
 
 @@ watch.html.ep
 % layout 'default';
