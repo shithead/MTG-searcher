@@ -1,11 +1,11 @@
 #!/usr/bin/env perl
 use Mojolicious::Lite -signatures;
 use lib qw(lib);
-use MyApp::Model::Users;
 #$r->get('/register')->to(
 #    controller => 'RegistrationController', action => 'register'
 #);
 use MIME::Base64;
+use Mojo::IOLoop;
 use Mojo::UserAgent;
 use Mojo::JSON qw(decode_json encode_json);
 use Text::CSV;
@@ -20,9 +20,10 @@ plugin 'TagHelpers';
 
 our $dbh;
 our $ua  = Mojo::UserAgent->new;
+
 app->hook(before_server_start => sub {
     my ($server, $app) = @_;
-    $dbh = $app->dbcreate;
+    $app->dbcreate;
   });
 
 ##### Database
@@ -31,13 +32,10 @@ our $dbhost = '';
 our $dbport = '';
 our $dbuser = '';
 our $dbpassword= '';
+our $driver   = "SQLite";
 
-helper dbcreate => sub {
-  my $self = shift;
-  my $dbh = $dbh or undef;
-  my $rv = undef;
-
-  my $driver   = "SQLite";
+helper dbh => sub {
+  state $dbh = $dbh or undef;
   if (not defined $dbh) {
     my $data_source;
     if ( "MySQL" eq $driver ) {
@@ -50,32 +48,38 @@ helper dbcreate => sub {
       {ChopBlanks=>1, AutoCommit=>1,RaiseError=>0,PrintError=>1})
       or die $DBI::errstr;
     print "Opened database successfully\n";
+  }
 
-    my $schema = { 'create_table' => [ 'collection', 'users']};
-    foreach my $key (sort keys %{$schema}) {
-      foreach my $table (values @{$schema->{$key}}) {
-        my $path = Mojo::File->new($key.'_' . $table . '.sql');
-        my $stmt = $path->slurp;
-        foreach (split(/;/, $stmt)) {
-          $rv = $dbh->do($_.";");
-          if($rv lt 0) {
-            #Var DBI::errstr ist in diesem Kontext unbekannt
-            print "DBI Error (rv lt 0)\n";
-          } else {
-            print $key . ' ' . $table . " created successfully\n";
-          }
+  return $dbh;
+};
+
+helper dbcreate => sub {
+  my $c = shift;
+  my $rv = undef;
+
+  my $schema = { 'create_table' => [ 'collection', 'users']};
+  foreach my $key (sort keys %{$schema}) {
+    foreach my $table (values @{$schema->{$key}}) {
+      my $path = Mojo::File->new($key.'_' . $table . '.sql');
+      my $stmt = $path->slurp;
+      foreach (split(/;/, $stmt)) {
+        $rv = $c->dbh->do($_.";");
+        if($rv lt 0) {
+          #Var DBI::errstr ist in diesem Kontext unbekannt
+          print "DBI Error (rv lt 0)\n";
+        } else {
+          print $key . ' ' . $table . " created successfully\n";
         }
       }
     }
   }
-  return $dbh;
 };
 
 helper get_data => sub {
   my $c = shift;
   my $stmt = shift;
 
-  my $sth = $dbh->prepare("$stmt");
+  my $sth = $c->dbh->prepare("$stmt");
 
   $sth->execute or die $DBI::errstr;
   if (defined $sth) {
@@ -91,7 +95,7 @@ helper get_id => sub {
   my $name = shift;
   my $table = shift;
 
-  my $sth = $dbh->prepare("SELECT ID FROM $table WHERE Name == '$name';");
+  my $sth = $c->dbh->prepare("SELECT ID FROM $table WHERE Name == '$name';");
   $sth->execute or die $DBI::errstr;
   my $nameid = $sth->fetch();
   return @{$nameid}[0] if (defined $nameid);
@@ -105,7 +109,7 @@ helper insert_collection => sub {
   my $price = shift;
   my $cardnumber = shift;
   
-  my $sth = $dbh->prepare("INSERT INTO mtg (Name, Edition, Preis, CardNumber) VALUES( '$name', '$edition', '$price', '$cardnumber');");
+  my $sth = $c->dbh->prepare("INSERT INTO mtg (Name, Edition, Preis, CardNumber) VALUES( '$name', '$edition', '$price', '$cardnumber');");
   my $ret = $sth->execute or say $DBI::errstr;
   return undef if (not defined $ret or $ret eq "E0E");
 
@@ -117,7 +121,7 @@ helper insert_users => sub {
   my $name = shift;
   my $password = shift;
   
-  my $sth = $dbh->prepare("INSERT INTO users (Name, Password) VALUES( '$name', '$password');");
+  my $sth = $c->dbh->prepare("INSERT INTO users (Name, Password) VALUES( '$name', '$password');");
   my $ret = $sth->execute or say $DBI::errstr;
   return undef if (not defined $ret or $ret eq "E0E");
 
@@ -132,7 +136,7 @@ helper update_scraped => sub {
   my $image = shift;
   my $type = shift;
 
-  my $sth = $dbh->prepare("UPDATE mtg SET Oracle='$oracle', ManaCost='$mana_costs', Image='$image', Type='$type' WHERE ID=='$id';");
+  my $sth = $c->dbh->prepare("UPDATE mtg SET Oracle='$oracle', ManaCost='$mana_costs', Image='$image', Type='$type' WHERE ID=='$id';");
   my $ret = $sth->execute or say $DBI::errstr;
   return undef if (not defined $ret or $ret eq "E0E");
 
@@ -186,7 +190,7 @@ get '/scrape/scryfall' => sub ($c) {
 };
 
 
-get '/register' => sub($c) {
+get '/register' => sub ($c) {
   $c->render(
     template => 'register',
     error    => $c->flash('error'),
@@ -209,21 +213,12 @@ post '/register' => sub($c) {
     $c->redirect_to('register');
   }
 
-  #my $dbh = $c->app->{_dbh}; # TODO implement this
-
   my $users = $c->get_data("SELECT ID FROM users WHERE Name='$username';");
 
-  p $users;
   if ( defined $users and ! keys %{$users}  ) {
     eval {
       $c->insert_users($username, generate_password($password) )
-      #      $dbh->resultset('User')->create({ 
-      #          Name       => $username,
-      #          Password    => generate_password($password),
-      #          status      => 1
-      #        });
     };
-    p $@;
     if ($@) {
       $c->flash( error => 'Error in db query. Please check mysql logs.');
       $c->redirect_to('register');
@@ -439,6 +434,7 @@ __DATA__
 <h1>Welcome to Magic the Gathering Card search</h1>
 %= button_to "Import Collection" => 'upload'  => (class => "")
 %= button_to "Watch and search" => 'watch'
+%= button_to "Register" => 'register'
 %= button_to "Login" => 'login'
 
 @@ layouts/default.html.ep
