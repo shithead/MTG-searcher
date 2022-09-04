@@ -1,0 +1,29 @@
+CREATE TRIGGER IF NOT EXISTS trigger_create_user_table
+   AFTER OF INSERT 
+   ON mtg.users
+BEGIN
+  CREATE TABLE IF NOT EXISTS user_NEW.ID (
+     ID INTEGER NOT NULL UNIQUE,
+     Count INTEGER NOT NULL,
+     FOREIGN KEY (ID)
+     REFERENCES mtg (ID) 
+      ON DELETE CASCADE
+    );
+  CREATE TABLE IF NOT EXISTS user_NEW.ID_decks (
+     cardID INTEGER NOT NULL,
+     Count INTEGER NOT NULL,
+     deckID INTEGER NOT NULL,
+     deckName VARCHAR(255) NOT NULL,
+     FOREIGN KEY (cardID)
+     REFERENCES mtg (ID) 
+      ON DELETE CASCADE
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS trigger_delete_user
+   AFTER OF DELETE
+   ON mtg.users
+BEGIN
+  DROP TABLE user_OLD.ID;
+  DROP TABLE user_OLD.ID_decks;
+END;
