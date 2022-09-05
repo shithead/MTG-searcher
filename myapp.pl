@@ -20,6 +20,8 @@ plugin 'TagHelpers';
 
 our $dbh;
 our $ua  = Mojo::UserAgent->new;
+# XXX DEVELOPEMENT
+$ua = $ua->insecure(1);
 
 app->hook(before_server_start => sub {
     my ($server, $app) = @_;
@@ -135,8 +137,8 @@ helper update_scraped => sub {
   my $mana_costs = shift;
   my $image = shift;
   my $type = shift;
-
-  my $sth = $c->dbh->prepare("UPDATE mtg SET Oracle='$oracle', ManaCost='$mana_costs', Image='$image', Type='$type' WHERE ID=='$id';");
+  my $h = "UPDATE mtg SET Oracle='$oracle', ManaCost='$mana_costs', Type='$type', Image='$image' WHERE ID=='$id';";
+  my $sth = $c->dbh->prepare($h);
   my $ret = $sth->execute or say $DBI::errstr;
   return undef if (not defined $ret or $ret eq "E0E");
 
@@ -150,11 +152,12 @@ get '/' => sub ($c) {
 
 get '/scrape/scryfall' => sub ($c) {
   # Fine grained response handling (dies on connection errors)
-  my $ua  = Mojo::UserAgent->new;
+  #my $ua  = Mojo::UserAgent->new;
+  ## XXX DEVELOPEMENT
+  #$ua = $ua->insecure(1);
   my $js = {image => undef, oracle => undef, mana_costs => undef, type => undef};
-  #my $rows = $c->get_data('SELECT ID, Name FROM mtg;');
-  my $rows = $c->get_data('SELECT ID, Name FROM mtg WHERE Oracle IS NULL;');
-  my $xpath = 'div[class=card-grid-inner] > div > a[class=card-grid-item-card]';
+  my $rows = $c->get_data('SELECT ID, Name FROM mtg LIMIT 2;');
+  my $xpath = 'div[class=toolbox-column] > ul[class=toolbox-links] > li > a > b';
 
   foreach my $key (keys %{$rows}) {
     my $id = $rows->{$key}->{'ID'};
@@ -162,29 +165,19 @@ get '/scrape/scryfall' => sub ($c) {
     $name =~ s/ \(.+\)$//g;
     chomp($name);
     $name =~ s/ /+/g;
-    my $res = $ua->max_redirects(2)->get("https://scryfall.com/search?q=$name")->result;
-    # if a card grid is showing.
-    if (my $cardgrid = $res->dom->find($xpath)) {
-      $name =~ s/\+/ /g;
-      my $griditem;
-      foreach $griditem ($cardgrid->each) {
-        if ($griditem->at('span')->text() eq $name){
-          $res = $ua->max_redirects(2)->get($griditem->attr->{href})->result;
-          last;
-        }
-      }
-    }
-
-    say $name;
-    $js->{image} = extract_image($res->dom);
-    $js->{oracle} = extract_oracle($res->dom);
-    $js->{mana_costs} = extract_mana_costs($res->dom);
-    $js->{type} = extract_type($res->dom);
-    say "oracle: $js->{oracle}" if defined $js->{oracle};
-    say "mana_costs: $js->{mana_costs}" if defined $js->{mana_costs};
-    say "type: $js->{type}" if defined $js->{type};
-    $c->update_scraped($id, $js->{oracle}, $js->{mana_costs}, $js->{image}, $js->{type});
-    #sleep 5;
+    my $promise = $ua->max_redirects(2)->get_p("https://scryfall.com/search?q=$name")->then(sub($tx) { 
+      my $res = $tx->result->dom->find($xpath)->first(qr/JSON/)->parent->attr->{href};
+      return unless defined $res ;
+      my $json = decode_json($ua->get($res)->result->body);
+      $json->{oracle_text} =~ s/'/''/g;
+      $c->update_scraped(
+        $id,
+        $json->{oracle_text},
+        $json->{mana_cost},
+        extract_image($json->{image_uris}->{small}),
+        $json->{type_line}
+      );
+    })->wait;
   }
   $c->redirect_to('watch');
 };
@@ -270,48 +263,59 @@ group {
     # Process uploaded file
     return $c->redirect_to('form') unless my $collection = $c->param('collection');
 
-
-    ## XXX BEGIN OF long operation time
-    Mojo::IOLoop->subprocess->run_p(sub ($){
-        my $csv = Text::CSV->new({ sep_char => ',' });
-        my $sum = 0;
-        my $matrix = {};
-        my @lines = split('\n', $collection->slurp);
-        foreach my $line (@lines) {
-          chomp($line);
-          if ($csv->parse($line)) {
-
-            my @fields = $csv->fields();
-            push(@{$matrix->{$sum}}, $csv->fields());
-            $matrix->{$sum}[2] =~ s/'/''/;
-            $matrix->{$sum}[3] =~ s/'/''/;
-          } else {
-            warn "Line could not be parsed: $line\n";
-          }
-          # export to extra route
-          if ($sum gt 0) {
-            my $rv = $c->insert_collection(
-              $matrix->{$sum}[2],
-              $matrix->{$sum}[3],
-              $matrix->{$sum}[13],
-              $matrix->{$sum}[4]
-            );
-            print "insert number: $sum, ID: $rv\n";
-          }
-          $sum += 1;
-        }
-        return $matrix;
-      })->then(sub ($matrix) {
-        $c->render(json => $matrix);
-      })->catch(sub ($err) {
-        $c->render(text => $err);
-      })->wait;
+    import_collection($c, $collection) 
   };
 };
+
+sub import_collection {
+  my $c = shift;
+  my $collection = shift;
+
+
+  my $subprocImportCollection = Mojo::IOLoop::Subprocess->new;
+  my $promise = $subprocImportCollection->run_p( sub($subproc) {
+      my $csv = Text::CSV->new({ sep_char => ',' });
+      my $sum = 0;
+      my $matrix = {};
+      my @lines = split('\n', $collection->slurp);
+      foreach my $line (@lines) {
+        chomp($line);
+        if ($csv->parse($line)) {
+
+          my @fields = $csv->fields();
+          push(@{$matrix->{$sum}}, $csv->fields());
+          $matrix->{$sum}[2] =~ s/'/''/;
+          $matrix->{$sum}[3] =~ s/'/''/;
+        } else {
+          warn "Line could not be parsed: $line\n";
+          $subproc->progress({ text => "Line could not be parsed: $line"})
+        }
+        # export to extra route
+        if ($sum gt 0) {
+          my $rv = $c->insert_collection(
+            $matrix->{$sum}[2],
+            $matrix->{$sum}[3],
+            $matrix->{$sum}[13],
+            $matrix->{$sum}[4]
+          );
+          print "insert number: $sum, ID: $rv\n";
+          $subproc->progress({ text => "insert number: $sum, ID: $rv"})
+        }
+        $sum += 1;
+      }
+      return $matrix;
+    })->then(sub ($matrix) {
+      $c->render(json => $matrix);
+    })->catch(sub ($err) {
+      $c->render( text => $err )
+    })->wait;
+
+}
 
 get '/watch' =>  sub($c) {
   $c->render(template => 'watch');
 };
+
 websocket '/watch/ws' =>  sub($c) {
   my $rows = $c->get_data('SELECT ID, Image, Name, Type, Oracle, ManaCost FROM mtg;');
   my $rows_size = keys %{$rows};
@@ -370,9 +374,8 @@ websocket '/watch/ws' =>  sub($c) {
 
 
 sub extract_image($){
-  my $dom = shift;
+  my $src = shift;
   my $content = '';
-  my $src = $dom->find('img[class]')->first->attr->{src};
   return undef unless defined $src;
   $content = encode_base64($ua->max_redirects(2)->get($src)->result->body);
 
@@ -380,55 +383,55 @@ sub extract_image($){
   return $content;
 };
 
-sub extract_oracle($){
-  my $dom = shift;
-  my $content = "";
-  my $oracledom = $dom->find('div[class=card-text-oracle] > p');
-  foreach my $oracle ($oracledom->each) {
-    $content .= " " if ($content ne "");
-    $content .= $oracle->all_text;
-  }
-  return undef if $content eq "";
-  return $content;
-};
-
-sub extract_type($){
-  my $dom = shift;
-  my $content = "";
-  $content = $dom->at('p[class=card-text-type-line]')->text();
-  chomp($content);
-  $content =~ s/^\s+//x;
-  return undef if $content eq "";
-  return $content;
-};
-
-sub extract_mana_costs($){
-  my $dom = shift;
-  my $content = '';
-  $content = extract_symbols($dom->find('span[class=card-text-mana-cost]')->first);
-  return $content;
-};
-
-sub extract_symbols($){
-  my $dom = shift;
-  return undef unless defined $dom;
-
-  my $manasymbols = "";
-  foreach  (@{$dom->find('abbr[class]')}){
-    if ('{T}' eq $_->content) {
-      # some different notion with {T}
-      if ($manasymbols ne "") {
-        $manasymbols = join(", ",$manasymbols, $_->content);
-      } else {
-        $manasymbols = $_->content;
-      }
-    } else {
-      $manasymbols = join(" ",$manasymbols, $_->content);
-    }
-  }
-  $manasymbols =~ s/^\s+//x;
-  return $manasymbols;
-};
+#sub extract_oracle($){
+#  my $dom = shift;
+#  my $content = "";
+#  my $oracledom = $dom->find('div[class=card-text-oracle] > p');
+#  foreach my $oracle ($oracledom->each) {
+#    $content .= " " if ($content ne "");
+#    $content .= $oracle->all_text;
+#  }
+#  return undef if $content eq "";
+#  return $content;
+#};
+#
+#sub extract_type($){
+#  my $dom = shift;
+#  my $content = "";
+#  $content = $dom->at('p[class=card-text-type-line]')->text();
+#  chomp($content);
+#  $content =~ s/^\s+//x;
+#  return undef if $content eq "";
+#  return $content;
+#};
+#
+#sub extract_mana_costs($){
+#  my $dom = shift;
+#  my $content = '';
+#  $content = extract_symbols($dom->find('span[class=card-text-mana-cost]')->first);
+#  return $content;
+#};
+#
+#sub extract_symbols($){
+#  my $dom = shift;
+#  return undef unless defined $dom;
+#
+#  my $manasymbols = "";
+#  foreach  (@{$dom->find('abbr[class]')}){
+#    if ('{T}' eq $_->content) {
+#      # some different notion with {T}
+#      if ($manasymbols ne "") {
+#        $manasymbols = join(", ",$manasymbols, $_->content);
+#      } else {
+#        $manasymbols = $_->content;
+#      }
+#    } else {
+#      $manasymbols = join(" ",$manasymbols, $_->content);
+#    }
+#  }
+#  $manasymbols =~ s/^\s+//x;
+#  return $manasymbols;
+#};
 
 app->start;
 __DATA__
@@ -442,9 +445,11 @@ __DATA__
 % title 'Welcome to Magic the Gathering Card search';
 <h1>Welcome to Magic the Gathering Card search</h1>
 %= button_to "Import Collection" => 'upload'  => (class => "")
+%= button_to "Scrape" => '/scrape/scryfall'
 %= button_to "Watch and search" => 'watch'
 %= button_to "Register" => 'register'
 %= button_to "Login" => 'login'
+
 
 @@ layouts/default.html.ep
 <!DOCTYPE html>
