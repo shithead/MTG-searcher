@@ -9,4 +9,17 @@ Attention this is high developed Project.
 * Search your Collection
   * Run Filter on Oracle full text search.
 * User specified decks
- * register works, nothing else
+  * register works, nothing else
+
+## dependencies
+
+### programms
+
+* openssl
+
+### Perl
+* DBD::SQLite
+* DBI
+* Text::CSV
+* Crypt::PBKDF2
+* IO::Socket::SSL

@@ -10,4 +10,3 @@ CREATE TABLE IF NOT EXISTS mtg (
     Image BLOB,
     UNIQUE (Name, Edition) ON CONFLICT IGNORE
 );
-
