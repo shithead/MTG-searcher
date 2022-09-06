@@ -156,28 +156,48 @@ get '/scrape/scryfall' => sub ($c) {
   ## XXX DEVELOPEMENT
   #$ua = $ua->insecure(1);
   my $js = {image => undef, oracle => undef, mana_costs => undef, type => undef};
-  my $rows = $c->get_data('SELECT ID, Name FROM mtg LIMIT 2;');
+  my $rows = $c->get_data('SELECT ID, Name FROM mtg');
   my $xpath = 'div[class=toolbox-column] > ul[class=toolbox-links] > li > a > b';
 
+  my $k = 1;
   foreach my $key (keys %{$rows}) {
+    if ($k % 8) {
+      $k += 1;
+    } else {
+      sleep 5;
+      $k = 1;
+    }
     my $id = $rows->{$key}->{'ID'};
     my $name = $rows->{$key}->{'Name'};
     $name =~ s/ \(.+\)$//g;
     chomp($name);
     $name =~ s/ /+/g;
+    print "$name\n";
+    $ua = $ua->connect_timeout(8)->request_timeout(10);
     my $promise = $ua->max_redirects(2)->get_p("https://scryfall.com/search?q=$name")->then(sub($tx) { 
-      my $res = $tx->result->dom->find($xpath)->first(qr/JSON/)->parent->attr->{href};
-      return unless defined $res ;
-      my $json = decode_json($ua->get($res)->result->body);
-      $json->{oracle_text} =~ s/'/''/g;
-      $c->update_scraped(
-        $id,
-        $json->{oracle_text},
-        $json->{mana_cost},
-        extract_image($json->{image_uris}->{small}),
-        $json->{type_line}
-      );
-    })->wait;
+        my $res = $tx->result->dom->find($xpath)->first(qr/JSON/);
+
+        # possible a grid
+        unless (defined $res) {
+          my $griditem = $tx->result->dom->find('a[class=card-grid-item-card] > span[class="card-grid-item-invisible-label"]');
+          foreach ($griditem->each) {
+            if ($_->text() eq "$name") {
+              $res = $ua->max_redirects(2)->get($_->parent->attr->{href})->result->dom->find($xpath)->first(qr/JSON/);
+              last;
+            }
+          }
+        }
+        $res = $res->parent->attr->{href};
+        my $json = decode_json($ua->get($res)->result->body);
+        $json->{oracle_text} =~ s/'/''/g;
+        $c->update_scraped(
+          $id,
+          $json->{oracle_text},
+          $json->{mana_cost},
+          extract_image($json->{image_uris}->{small}),
+          $json->{type_line}
+        );
+      })->wait;
   }
   $c->redirect_to('watch');
 };
