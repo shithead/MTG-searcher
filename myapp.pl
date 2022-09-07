@@ -223,7 +223,7 @@ helper process_scrape => sub {
   if ( grep( /^Transform/, @{$json->{keywords}} ) ) {
     say "is Transform";
     foreach ($json->{card_faces}) {
-      $json->{oracle_text} =~ s/'/''/g;
+      $_->{oracle_text} =~ s/'/''/g;
       $type .= $_->{type_line};
       $oracle .= $_->{oracle_text};
       $oracle .= "\n";
