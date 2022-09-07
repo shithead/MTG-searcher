@@ -137,7 +137,8 @@ helper update_scraped => sub {
   my $mana_costs = shift;
   my $image = shift;
   my $type = shift;
-  my $h = "UPDATE mtg SET Oracle='$oracle', ManaCost='$mana_costs', Type='$type', Image='$image' WHERE ID=='$id';";
+  my $rawdata = shift;
+  my $h = "UPDATE mtg SET Oracle='$oracle', ManaCost='$mana_costs', Type='$type', Image='$image', Rawdata='$rawdata' WHERE ID=='$id';";
   my $sth = $c->dbh->prepare($h);
   my $ret = $sth->execute or say $DBI::errstr;
   return undef if (not defined $ret or $ret eq "E0E");
@@ -150,58 +151,95 @@ get '/' => sub ($c) {
   $c->render(template => 'index');
 };
 
-get '/scrape/scryfall' => sub ($c) {
-  # Fine grained response handling (dies on connection errors)
-  #my $ua  = Mojo::UserAgent->new;
-  ## XXX DEVELOPEMENT
-  #$ua = $ua->insecure(1);
-  my $js = {image => undef, oracle => undef, mana_costs => undef, type => undef};
-  my $rows = $c->get_data('SELECT ID, Name FROM mtg');
-  my $xpath = 'div[class=toolbox-column] > ul[class=toolbox-links] > li > a > b';
-
-  my $k = 1;
-  foreach my $key (keys %{$rows}) {
-    if ($k % 8) {
-      $k += 1;
-    } else {
-      sleep 5;
-      $k = 1;
-    }
-    my $id = $rows->{$key}->{'ID'};
-    my $name = $rows->{$key}->{'Name'};
-    $name =~ s/ \(.+\)$//g;
-    chomp($name);
-    $name =~ s/ /+/g;
-    print "$name\n";
-    $ua = $ua->connect_timeout(8)->request_timeout(10);
-    my $promise = $ua->max_redirects(2)->get_p("https://scryfall.com/search?q=$name")->then(sub($tx) { 
-        my $res = $tx->result->dom->find($xpath)->first(qr/JSON/);
-
-        # possible a grid
-        unless (defined $res) {
-          my $griditem = $tx->result->dom->find('a[class=card-grid-item-card] > span[class="card-grid-item-invisible-label"]');
-          foreach ($griditem->each) {
-            if ($_->text() eq "$name") {
-              $res = $ua->max_redirects(2)->get($_->parent->attr->{href})->result->dom->find($xpath)->first(qr/JSON/);
-              last;
-            }
-          }
-        }
-        $res = $res->parent->attr->{href};
-        my $json = decode_json($ua->get($res)->result->body);
-        $json->{oracle_text} =~ s/'/''/g;
-        $c->update_scraped(
-          $id,
-          $json->{oracle_text},
-          $json->{mana_cost},
-          extract_image($json->{image_uris}->{small}),
-          $json->{type_line}
+our $scrapeTimerID = Mojo::IOLoop->recurring(60 => sub ($loop) {
+    my $scrapeSubprocess = $loop->subprocess;
+    $scrapeSubprocess->on(
+      progress => sub($subproc, @data) {
+        my $res = $data[0];
+        app->update_scraped(
+          $res->{id},
+          $res->{oracle},
+          $res->{mana_cost},
+          $res->{image},
+          $res->{type},
+          $res->{rawdata}
         );
-      })->wait;
-  }
-  $c->redirect_to('watch');
-};
+      });
+    $scrapeSubprocess->on(cleanup => sub ($subprocess) { say "Process $$ is about to exit" });
+    # Fine grained response handling (dies on connection errors)
+    $scrapeSubprocess = $scrapeSubprocess->run( sub ($subprocess) {
+        my $rows = app->get_data('SELECT ID, Name FROM mtg WHERE Rawdata IS NULL LIMIT 10');
+        foreach my $key (keys %{$rows}) {
+          my $id = $rows->{$key}->{'ID'};
+          my $name = $rows->{$key}->{'Name'};
+          $name =~ s/ \(.+\)$//g;
+          chomp($name);
+          $name =~ s/ /+/g;
+          print "$name\n";
+          app->process_scrape($name, $id, $subprocess);
+          #$c->process_scrape($name, $id, undef);
+        }
+      });
+  });
 
+helper process_scrape => sub {
+  my $c = shift;
+  my $name = shift;
+  my $id = shift;
+  my $subproc = shift || undef;
+  my $ua  = Mojo::UserAgent->new();
+  $ua = $ua->ioloop($subproc->ioloop) if (defined $subproc) ;
+  # XXX DEVELOPEMENT
+  $ua = $ua->insecure(1);
+  $ua = $ua->connect_timeout(30)->request_timeout(45);
+
+  my $xpath = 'div[class=toolbox-column] > ul[class=toolbox-links] > li > a > b';
+  my $res = $ua->max_redirects(2)->get("https://scryfall.com/search?q=$name")->result;
+  print "fetched anchore child \n";
+  my $toolboxLinks = $res->dom->find($xpath);
+
+  # possible a grid
+  unless (defined $toolboxLinks and $toolboxLinks->size) {
+    print "find griditems\n";
+    my $griditem = $res->dom->find('a[class=card-grid-item-card] > span[class="card-grid-item-invisible-label"]');
+    foreach ($griditem->each) {
+      $name =~ s/\+/ /;
+      if ($_->text eq "$name") {
+        print "refetch anchore child after cardgrid\n";
+        $toolboxLinks = $ua->max_redirects(2)->get($_->parent->attr->{href})->result->dom->find($xpath);
+        last;
+      }
+    }
+  }
+  my $JSONLink = $toolboxLinks->first(qr/JSON/)->parent->attr->{href};
+  print "fetch json\n";
+  my $jsonres = $ua->get($JSONLink)->result;
+  my $json  = $jsonres->json;
+  $json->{oracle_text} =~ s/'/''/g;
+  print "fetching image \n";
+  my $image = encode_base64($ua->max_redirects(2)->get($json->{image_uris}->{small})->result->body or undef);
+  
+  if (defined $subproc) {
+  print "update collection for $name\n";
+  $subproc->progress({
+      id => $id,
+      oracle => $json->{oracle_text},
+      mana_cost => $json->{mana_cost},
+      image => $image,
+      type => $json->{type_line},
+      rawdata => encode_base64($jsonres->body)
+    });
+  } else {
+    $c->update_scraped(
+      $id,
+      $json->{oracle_text},
+      $json->{mana_cost},
+      $image,
+      $json->{type_line},
+      encode_base64($jsonres->body)
+    );
+  }
+};
 
 get '/register' => sub ($c) {
   $c->render(
@@ -391,17 +429,6 @@ websocket '/watch/ws' =>  sub($c) {
 
 };
 
-
-
-sub extract_image($){
-  my $src = shift;
-  my $content = '';
-  return undef unless defined $src;
-  $content = encode_base64($ua->max_redirects(2)->get($src)->result->body);
-
-  return undef if $content eq "";
-  return $content;
-};
 
 #sub extract_oracle($){
 #  my $dom = shift;

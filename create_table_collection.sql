@@ -8,5 +8,6 @@ CREATE TABLE IF NOT EXISTS mtg (
     CardNumber VARCHAR(255),
     Preis DECIMAL(10,2),
     Image BLOB,
+    Rawdata BLOB,
     UNIQUE (Name, Edition) ON CONFLICT IGNORE
 );
