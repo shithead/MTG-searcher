@@ -127,7 +127,46 @@ helper insert_users => sub {
   my $ret = $sth->execute or say $DBI::errstr;
   return undef if (not defined $ret or $ret eq "E0E");
 
-  return $c->get_id($name, "users");
+  my $id = $c->get_id($name, "users");
+  $ret = $c->create_user_collection($id);
+  return undef if (not defined $ret or $ret eq "E0E");
+  $ret = $c->create_user_deck($id);
+  return undef if (not defined $ret or $ret eq "E0E");
+
+  return $id;
+};
+
+helper create_user_collection => sub {
+  my $c = shift;
+  my $id = shift;
+  my $stmt = "CREATE TABLE IF NOT EXISTS user_collection_$id (
+    ID INTEGER NOT NULL UNIQUE,
+    Count INTEGER NOT NULL,
+    FOREIGN KEY (ID)
+    REFERENCES mtg (ID) 
+    ON DELETE CASCADE ON UPDATE NO ACTION
+    );";
+  my $sth = $c->dbh->prepare($stmt);
+  my $ret = $sth->execute or say $DBI::errstr;
+  return $ret;
+};
+
+helper create_user_deck => sub {
+  my $c = shift;
+  my $id = shift;
+  my $stmt = "CREATE TABLE IF NOT EXISTS user_deck_$id (
+      ID INTEGER NOT NULL,
+      cardID INTEGER NOT NULL,
+      Count INTEGER NOT NULL,
+      deckName VARCHAR(255) NOT NULL,
+      PRIMARY KEY (cardID, ID),
+      FOREIGN KEY (cardID)
+      REFERENCES mtg (ID) 
+      ON DELETE CASCADE ON UPDATE NO ACTION
+    );";
+  my $sth = $c->dbh->prepare($stmt);
+  my $ret = $sth->execute or say $DBI::errstr;
+  return $ret;
 };
 
 helper update_scraped => sub {
@@ -320,11 +359,61 @@ sub generate_password {
 };
 
 get '/login' =>  sub($c) {
-  $c->render(template => 'login');
+  $c->render(
+    template => 'login',
+    error    => $c->flash('error'),
+    message  => $c->flash('message')
+  );
+};
+
+post '/login' =>  sub($c) {
+  my $user = $c->param('username');
+  my $pass = $c->param('password');
+
+  unless ($c->login_check($user, $pass)) {
+    $c->flash( error => 'Username or Password failed.');
+    $c->redirect_to('login');
+  } else {
+    $c->session(user => $user);
+    $c->flash(message => 'Thanks for logging in.');
+    $c->redirect_to(
+      "user/$user"
+    );
+  }
+};
+
+helper login_check => sub ($,$,$){
+  my $c = shift;
+  my $user = shift;
+  my $pass = shift;
+  my $res = $c->get_data("SELECT ID, Name, Password FROM Users WHERE Name = '$user'");
+  my $id = $c->get_id($user, "users");
+  my $pbkdf2 = Crypt::PBKDF2->new(
+    hash_class => 'HMACSHA1', 
+    iterations => 1000,       
+    output_len => 20,         
+    salt_len   => 4,         
+  );
+  return $pbkdf2->validate($res->{$id}->{Password},$pass) 
+};
+
+# Logout action
+get '/logout' => sub ($c) {
+
+  # Expire and in turn clear session automatically
+  $c->session(expires => 1);
+
+  # Redirect to main page with a 302 response
+  $c->redirect_to('index');
 };
 
 group {
-  under 'user';
+  under 'user/:user' => sub($c) {
+    # Redirect to main page with a 302 response if user is not logged in
+    return 1 if $c->session('user');
+    $c->redirect_to('index');
+    return undef;
+  };
 };
 
 
@@ -513,6 +602,49 @@ __DATA__
              />   
             <br /> <br />
             <input class="btn btn-primary" type="submit" value="Register">
+            <br />  <br />
+        </form>
+      % if ($error) {
+            <div class="error" style="color: red">
+                <small> <%= $error %> </small>
+            </div>
+        %}
+
+        % if ($message) {
+            <div class="error" style="color: green">
+                <small> <%= $message %> </small>
+            </div>
+        %}
+    </div>
+
+</div>
+
+@@ login.html.ep
+% layout 'default';
+% title 'Login';
+<br /> <br />
+<div class="container">
+    <div class="card col-sm-6 mx-auto">
+        <div class="card-header text-center">
+            User Login Form
+        </div>
+        <br /> <br />
+        <form method="post" action='/login'>
+            <input class="form-control" 
+                   id="username" 
+                   name="username" 
+                   type="username" size="40"
+                   placeholder="Enter Username" 
+             />
+            <br /> <br />
+            <input class="form-control" 
+                   id="password" 
+                   name="password" 
+                   type="password" 
+                   size="40" 
+                   placeholder="Enter Password" 
+             />   
+            <input class="btn btn-primary" type="submit" value="Login">
             <br />  <br />
         </form>
       % if ($error) {

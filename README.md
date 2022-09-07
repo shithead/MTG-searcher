@@ -9,7 +9,7 @@ Attention this is high developed Project.
 * Search your Collection
   * Run Filter on Oracle full text search.
 * User specified decks
-  * register works, nothing else
+  * register, login, logout works, nothing else
 
 ## dependencies
 
