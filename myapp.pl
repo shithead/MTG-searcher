@@ -215,27 +215,48 @@ helper process_scrape => sub {
   print "fetch json\n";
   my $jsonres = $ua->get($JSONLink)->result;
   my $json  = $jsonres->json;
-  $json->{oracle_text} =~ s/'/''/g;
+
+  my $oracle = "";
+  my $type = "";
+  my $imageURL = undef;
+  # test on Transform card
+  if ( grep( /^Transform/, @{$json->{keywords}} ) ) {
+    say "is Transform";
+    foreach ($json->{card_faces}) {
+      $json->{oracle_text} =~ s/'/''/g;
+      $type .= $_->{type_line};
+      $oracle .= $_->{oracle_text};
+      $oracle .= "\n";
+      $type .= "\n";
+      $imageURL = $_->{image_uris}->{small} unless (defined $imageURL);
+    }
+  } else {
+    $json->{oracle_text} =~ s/'/''/g;
+    $oracle = $json->{oracle_text};
+    $type = $json->{type_line};
+    $imageURL = $json->{image_uris}->{small};
+  }
+
   print "fetching image \n";
-  my $image = encode_base64($ua->max_redirects(2)->get($json->{image_uris}->{small})->result->body or undef);
+  my $image = encode_base64($ua->max_redirects(2)->get($imageURL)->result->body or undef);
   
   if (defined $subproc) {
   print "update collection for $name\n";
   $subproc->progress({
       id => $id,
-      oracle => $json->{oracle_text},
+      oracle => $oracle,
       mana_cost => $json->{mana_cost},
       image => $image,
-      type => $json->{type_line},
+      type => $type,
       rawdata => encode_base64($jsonres->body)
     });
   } else {
     $c->update_scraped(
       $id,
-      $json->{oracle_text},
+      $oracle,
       $json->{mana_cost},
       $image,
-      $json->{type_line},
+      $type,
       encode_base64($jsonres->body)
     );
   }
@@ -428,57 +449,6 @@ websocket '/watch/ws' =>  sub($c) {
     });
 
 };
-
-
-#sub extract_oracle($){
-#  my $dom = shift;
-#  my $content = "";
-#  my $oracledom = $dom->find('div[class=card-text-oracle] > p');
-#  foreach my $oracle ($oracledom->each) {
-#    $content .= " " if ($content ne "");
-#    $content .= $oracle->all_text;
-#  }
-#  return undef if $content eq "";
-#  return $content;
-#};
-#
-#sub extract_type($){
-#  my $dom = shift;
-#  my $content = "";
-#  $content = $dom->at('p[class=card-text-type-line]')->text();
-#  chomp($content);
-#  $content =~ s/^\s+//x;
-#  return undef if $content eq "";
-#  return $content;
-#};
-#
-#sub extract_mana_costs($){
-#  my $dom = shift;
-#  my $content = '';
-#  $content = extract_symbols($dom->find('span[class=card-text-mana-cost]')->first);
-#  return $content;
-#};
-#
-#sub extract_symbols($){
-#  my $dom = shift;
-#  return undef unless defined $dom;
-#
-#  my $manasymbols = "";
-#  foreach  (@{$dom->find('abbr[class]')}){
-#    if ('{T}' eq $_->content) {
-#      # some different notion with {T}
-#      if ($manasymbols ne "") {
-#        $manasymbols = join(", ",$manasymbols, $_->content);
-#      } else {
-#        $manasymbols = $_->content;
-#      }
-#    } else {
-#      $manasymbols = join(" ",$manasymbols, $_->content);
-#    }
-#  }
-#  $manasymbols =~ s/^\s+//x;
-#  return $manasymbols;
-#};
 
 app->start;
 __DATA__
