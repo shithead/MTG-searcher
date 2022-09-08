@@ -144,7 +144,8 @@ helper create_user_collection => sub {
     Count INTEGER NOT NULL,
     FOREIGN KEY (ID)
     REFERENCES mtg (ID) 
-    ON DELETE CASCADE ON UPDATE NO ACTION
+    ON DELETE CASCADE ON UPDATE NO ACTION,
+    UNIQUE (ID) ON CONFLICT IGNORE
     );";
   my $sth = $c->dbh->prepare($stmt);
   my $ret = $sth->execute or say $DBI::errstr;
@@ -164,6 +165,17 @@ helper create_user_deck => sub {
       REFERENCES mtg (ID) 
       ON DELETE CASCADE ON UPDATE NO ACTION
     );";
+  my $sth = $c->dbh->prepare($stmt);
+  my $ret = $sth->execute or say $DBI::errstr;
+  return $ret;
+};
+
+helper insert_user_collection => sub {
+  my $c = shift;
+  my $cardid = shift;
+  my $count = shift;
+  my $id = $c->get_id($c->session('user'), 'users');
+  my $stmt = "INSERT INTO user_collection_$id (ID , Count) VALUES ($cardid, $count);";
   my $sth = $c->dbh->prepare($stmt);
   my $ret = $sth->execute or say $DBI::errstr;
   return $ret;
@@ -190,7 +202,7 @@ get '/' => sub ($c) {
   $c->render(template => 'index');
 };
 
-our $scrapeTimerID = Mojo::IOLoop->recurring(60 => sub ($loop) {
+our $scrapeTimerID = Mojo::IOLoop->recurring(75 => sub ($loop) {
     my $scrapeSubprocess = $loop->subprocess;
     $scrapeSubprocess->on(
       progress => sub($subproc, @data) {
@@ -250,6 +262,7 @@ helper process_scrape => sub {
       }
     }
   }
+
   my $JSONLink = $toolboxLinks->first(qr/JSON/)->parent->attr->{href};
   print "fetch json\n";
   my $jsonres = $ua->get($JSONLink)->result;
@@ -377,7 +390,7 @@ post '/login' =>  sub($c) {
     $c->session(user => $user);
     $c->flash(message => 'Thanks for logging in.');
     $c->redirect_to(
-      "user/$user"
+      "user"
     );
   }
 };
@@ -411,22 +424,30 @@ get '/logout' => sub ($c) {
 };
 
 group {
-  under 'user/:user' => sub($c) {
+  under '/user' => sub($c) {
     # Redirect to main page with a 302 response if user is not logged in
     return 1 if $c->session('user');
-    $c->redirect_to('index');
+    $c->redirect_to('/login');
     return undef;
   };
+  get '/' => 'index';
+  group {
+    under 'deck';
+    # Upload form in DATA section
+    get 'create' => 'createdeck';
+    # Multipart upload handler
+    get 'watch' => 'watchdeck';
+  }
 };
 
 
 group {
   under 'collection';
   # Upload form in DATA section
-  get '/upload' => 'form';
+  get 'upload' => 'form';
 
   # Multipart upload handler
-  post '/upload' => sub ($c) {
+  post 'upload' => sub ($c) {
 
     # Check file size
     return $c->render(text => 'File is too big.', status => 200) if $c->req->is_limit_exceeded;
@@ -461,16 +482,31 @@ sub import_collection {
           warn "Line could not be parsed: $line\n";
           $subproc->progress({ text => "Line could not be parsed: $line"})
         }
-        # export to extra route
-        if ($sum gt 0) {
-          my $rv = $c->insert_collection(
-            $matrix->{$sum}[2],
-            $matrix->{$sum}[3],
-            $matrix->{$sum}[13],
-            $matrix->{$sum}[4]
+
+        # XXX some names are double check edition to, fuc sql hack
+        my $id = $c->get_id($matrix->{$sum}[2] . "' AND Edition == '$matrix->{$sum}[3]",'mtg');
+
+        
+        unless ($id) {
+          if ($sum gt 0) {
+            $id = $c->insert_collection(
+              $matrix->{$sum}[2],
+              $matrix->{$sum}[3],
+              $matrix->{$sum}[13],
+              $matrix->{$sum}[4]
+            );
+            print "insert number: $sum, ID: $id\n";
+            $subproc->progress({ text => "insert number: $sum, ID: $id"})
+          }
+        }
+
+        ## XXX foils not count
+        if ($c->session('user') and $id) {
+          say "insert id $id";
+          $c->insert_user_collection(
+            $id,
+            $matrix->{$sum}[0]
           );
-          print "insert number: $sum, ID: $rv\n";
-          $subproc->progress({ text => "insert number: $sum, ID: $rv"})
         }
         $sum += 1;
       }
@@ -553,12 +589,16 @@ __DATA__
 % layout 'default';
 % title 'Welcome to Magic the Gathering Card search';
 <h1>Welcome to Magic the Gathering Card search</h1>
-%= button_to "Import Collection" => 'upload'  => (class => "")
-%= button_to "Scrape" => '/scrape/scryfall'
-%= button_to "Watch and search" => 'watch'
+%= button_to "Watch and search"   => $self->url_for('watch')
+%= button_to "Import Collection"  => $self->url_for('form')
 %= button_to "Register" => 'register'
 %= button_to "Login" => 'login'
+%= button_to "Logout" => 'logout'
 
+% if ($self->session('user')) {
+%= button_to "Create a deck" => 'createdeck'
+%= button_to "show deck" => 'watchdeck'
+% }
 
 @@ layouts/default.html.ep
 <!DOCTYPE html>
