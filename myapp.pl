@@ -386,15 +386,18 @@ helper login_check => sub ($,$,$){
   my $c = shift;
   my $user = shift;
   my $pass = shift;
-  my $res = $c->get_data("SELECT ID, Name, Password FROM Users WHERE Name = '$user'");
   my $id = $c->get_id($user, "users");
-  my $pbkdf2 = Crypt::PBKDF2->new(
-    hash_class => 'HMACSHA1', 
-    iterations => 1000,       
-    output_len => 20,         
-    salt_len   => 4,         
-  );
-  return $pbkdf2->validate($res->{$id}->{Password},$pass) 
+  if (defined $id) {
+    my $res = $c->get_data("SELECT ID, Name, Password FROM Users WHERE Name = '$user'");
+    my $pbkdf2 = Crypt::PBKDF2->new(
+      hash_class => 'HMACSHA1', 
+      iterations => 1000,       
+      output_len => 20,         
+      salt_len   => 4,         
+    );
+    return $pbkdf2->validate($res->{$id}->{Password},$pass) 
+  } else { return 0;}
+
 };
 
 # Logout action
@@ -629,7 +632,7 @@ __DATA__
             User Login Form
         </div>
         <br /> <br />
-        <form method="post" action='/login'>
+        %= form_for login => (method => 'post') => begin
             <input class="form-control" 
                    id="username" 
                    name="username" 
@@ -644,9 +647,9 @@ __DATA__
                    size="40" 
                    placeholder="Enter Password" 
              />   
-            <input class="btn btn-primary" type="submit" value="Login">
+          %= submit_button 'Login' => (class => 'btn btn-primary')
             <br />  <br />
-        </form>
+        % end
       % if ($error) {
             <div class="error" style="color: red">
                 <small> <%= $error %> </small>
