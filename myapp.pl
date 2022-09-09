@@ -159,10 +159,12 @@ helper create_user_deck => sub {
       ID INTEGER NOT NULL,
       cardID INTEGER NOT NULL,
       Count INTEGER NOT NULL,
-      deckName VARCHAR(255) NOT NULL,
       PRIMARY KEY (cardID, ID),
       FOREIGN KEY (cardID)
       REFERENCES mtg (ID) 
+      ON DELETE CASCADE ON UPDATE NO ACTION,
+      FOREIGN KEY (ID)
+      REFERENCES deck (ID) 
       ON DELETE CASCADE ON UPDATE NO ACTION
     );";
   my $sth = $c->dbh->prepare($stmt);
@@ -435,6 +437,7 @@ group {
     under 'deck';
     # Upload form in DATA section
     get 'create' => 'createdeck';
+    get 'modify' => 'modifydeck';
     # Multipart upload handler
     get 'watch' => 'watchdeck';
   }
