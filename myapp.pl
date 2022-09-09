@@ -254,9 +254,9 @@ helper process_scrape => sub {
   # possible a grid
   unless (defined $toolboxLinks and $toolboxLinks->size) {
     print "find griditems\n";
-    my $griditem = $res->dom->find('a[class=card-grid-item-card] > span[class="card-grid-item-invisible-label"]');
+    my $griditem = $res->dom->find('a[class=card-grid-item-card] > span[class=card-grid-item-invisible-label]');
     foreach ($griditem->each) {
-      $name =~ s/\+/ /;
+      $name =~ s/\+/ /g;
       if ($_->text eq "$name") {
         print "refetch anchore child after cardgrid\n";
         $toolboxLinks = $ua->max_redirects(2)->get($_->parent->attr->{href})->result->dom->find($xpath);
@@ -655,7 +655,7 @@ __DATA__
             <input class="form-control" 
                    id="username" 
                    name="username" 
-                   type="username" size="40"
+                   type="username" size="56"
                    placeholder="Enter Username" 
              />
             <br /> <br />
