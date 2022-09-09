@@ -272,25 +272,54 @@ helper process_scrape => sub {
 
   my $oracle = "";
   my $type = "";
+  my $mana = undef;
   my $imageURL = undef;
   # test on Transform card
-  if ( grep( /^Transform/, @{$json->{keywords}} ) ) {
+  if ( defined $json->{card_faces} and values @{$json->{card_faces}}) {
     say "is Transform";
-    foreach (@{$json->{card_faces}}) {
-      $_->{oracle_text} =~ s/'/''/g;
-      $type .= $_->{type_line};
-      $oracle .= $_->{oracle_text};
-      $oracle .= "\n";
-      $type .= "\n";
-      $imageURL = $_->{image_uris}->{small} unless (defined $imageURL);
+    foreach (values @{$json->{card_faces}}) {
+      unless (defined $oracle) {
+        $oracle = $_->{oracle_text}
+      } else {
+        if (defined $_->{oracle_text}) {
+          $oracle .= "\n\n $_->{oracle_text}"
+        }
+      }
+      unless (defined $type) {
+        $type = $_->{type_line}
+      } else {
+        if (defined $_->{type_line}) {
+          $type .= "\n\n $_->{type_line}"
+        }
+      }
+
+      if (not defined $imageURL and defined $_->{image_uris}->{small}) {
+        $imageURL = $_->{image_uris}->{small};
+      } else {
+        if (defined $json->{image_uris}->{small}){
+          $imageURL = $json->{image_uris}->{small};
+        }
+      }
+      unless (defined $mana) {
+        $mana = $_->{mana_cost}
+      } else {
+        if (defined $_->{mana_cost}) {
+          $mana .= " // $_->{mana_cost}"
+        }
+      }
+
     }
   } else {
-    $json->{oracle_text} =~ s/'/''/g;
     $oracle = $json->{oracle_text};
     $type = $json->{type_line};
+    $mana = $json->{mana_cost};
     $imageURL = $json->{image_uris}->{small};
   }
 
+  $type =~ s/Ã¢ÂÂ/-/g;
+  $oracle =~ s/'/''/g;
+  $oracle =~ s/Ã¢ÂÂ/-/g;
+  $oracle =~ s/Ã¢ÂÂ¢/"/g;
   print "fetching image \n";
   my $image = encode_base64($ua->max_redirects(2)->get($imageURL)->result->body or undef);
   
@@ -299,7 +328,7 @@ helper process_scrape => sub {
   $subproc->progress({
       id => $id,
       oracle => $oracle,
-      mana_cost => $json->{mana_cost},
+      mana_cost => $mana,
       image => $image,
       type => $type,
       rawdata => encode_base64($jsonres->body)
@@ -308,7 +337,7 @@ helper process_scrape => sub {
     $c->update_scraped(
       $id,
       $oracle,
-      $json->{mana_cost},
+      $mana,
       $image,
       $type,
       encode_base64($jsonres->body)
@@ -616,14 +645,13 @@ __DATA__
 @@ register.html.ep
 % layout 'default';
 % title 'Register';
-<br /> <br />
 <div class="container">
     <div class="card col-sm-6 mx-auto">
         <div class="card-header text-center">
             User Registration Form
         </div>
         <br /> <br />
-        <form method="post" action='/register'>
+        %= form_for register => (method => 'post') => begin
             <input class="form-control" 
                    id="username" 
                    name="username" 
@@ -647,9 +675,9 @@ __DATA__
                    placeholder="Confirm Password" 
              />   
             <br /> <br />
-            <input class="btn btn-primary" type="submit" value="Register">
+          %= submit_button 'Register' => (class => 'btn btn-primary')
             <br />  <br />
-        </form>
+        % end
       % if ($error) {
             <div class="error" style="color: red">
                 <small> <%= $error %> </small>
@@ -668,7 +696,6 @@ __DATA__
 @@ login.html.ep
 % layout 'default';
 % title 'Login';
-<br /> <br />
 <div class="container">
     <div class="card col-sm-6 mx-auto">
         <div class="card-header text-center">
@@ -774,7 +801,7 @@ function addRow(jsonContent)
     row.appendChild(cellName);
 
     cellType = document.createElement("td");
-    textType = document.createTextNode(jsonContent[i].Type);
+    textType = document.createTextNode(jsonContent[i].Type.replace(/Ã¢ÂÂ/g,'-'));
     cellType.appendChild(textType);
     row.appendChild(cellType);
 
@@ -784,7 +811,7 @@ function addRow(jsonContent)
     row.appendChild(cellManaCost);
 
     cellOracle = document.createElement("td");
-    textOracle = document.createTextNode(jsonContent[i].Oracle);
+    textOracle = document.createTextNode(jsonContent[i].Oracle.replace(/Ã¢ÂÂ/g,'-').replace(/Ã¢ÂÂ¢/g,'"'));
     cellOracle.appendChild(textOracle);
     row.appendChild(cellOracle);
 
