@@ -988,7 +988,7 @@ ws.send(JSON.stringify(msg));
 function addRow(jsonContent)
 {
   if (!document.getElementsByTagName) return;
-  tabBody=document.getElementsByTagName("tbody").item(0);
+  tabBody=document.getElementsById("cardTBody").item(0);
   for (i = 0; i < jsonContent.length; i++) {
     row = document.createElement("tr");
     cellImage = document.createElement("td");
@@ -1022,58 +1022,41 @@ function addRow(jsonContent)
     tabBody.appendChild(row);
   }
 
-
-
 };
 
-function searchOracle() {
+const searchopt = {
+  "Oracle" : 4,
+  "ManaCost": 3,
+  "Type": 2,
+  "Name": 1
+}
+
+function search(key) {
   // Declare variables
   var input, filter, table, tr, td, i, txtValue;
-  input = document.getElementById("searchOracle");
+  input = document.getElementById("search"+key);
   filter = input.value.toUpperCase();
   table = document.getElementById("collectionTable");
   tr = table.getElementsByTagName("tr");
 
   // Loop through all table rows, and hide those who don't match the search query
   for (i = 0; i < tr.length; i++) {
-  td = tr[i].getElementsByTagName("td")[4];
-  if (td) {
-  txtValue = td.textContent || td.innerText;
-  if (txtValue.toUpperCase().indexOf(filter) > -1) {
-    tr[i].style.display = "";
-  } else {
-    tr[i].style.display = "none";
-  }
-}
+    td = tr[i].getElementsByTagName("td")[searchopt[key]];
+    if (td) {
+      txtValue = td.textContent || td.innerText;
+      if (txtValue.toUpperCase().indexOf(filter) > -1) {
+        tr[i].style.display = "";
+      } else {
+        tr[i].style.display = "none";
+      }
+    }
   }
 };
-
-function searchType() {
-  // Declare variables
-  var input, filter, table, tr, td, i, txtValue;
-  input = document.getElementById("searchType");
-  filter = input.value.toUpperCase();
-  table = document.getElementById("collectionTable");
-  tr = table.getElementsByTagName("tr");
-
-  // Loop through all table rows, and hide those who don't match the search query
-  for (i = 0; i < tr.length; i++) {
-  td = tr[i].getElementsByTagName("td")[2];
-  if (td) {
-  txtValue = td.textContent || td.innerText;
-  if (txtValue.toUpperCase().indexOf(filter) > -1) {
-    tr[i].style.display = "";
-  } else {
-    tr[i].style.display = "none";
-  }
-}
-  }
-}
 </script>
 
 <div style="position: fixed; top: 0; width: 100%; padding: 5px; margin-bottom: 25px;">
-<input type="text" id="searchType" onkeyup="searchType()" placeholder="Search for type..">
-<input type="text" id="searchOracle" onkeyup="searchOracle()" placeholder="Search for oracle..">
+<input type="text" id="searchType" onkeyup="search('Type')" placeholder="Search for type..">
+<input type="text" id="searchOracle" onkeyup="search('Oracle')" placeholder="Search for oracle..">
 </div>
 <div style="padding-top: 25px;">
 <table id="collectionTable" style="width:100%">
@@ -1084,7 +1067,7 @@ function searchType() {
 <th scope="col">Mana Costs</th>
 <th scope="col">Oracle</th>
 </tr>
-<tbody>
+<tbody id="cardTBody">
 </tbody>
 </table>
 </div>
