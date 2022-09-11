@@ -10,6 +10,7 @@ Attention this is high developed Project.
   * Run Filter on Oracle full text search.
 * User specified decks
   * register, login, logout works, nothing else
+  * add and remove deck table entry
 
 ## dependencies
 

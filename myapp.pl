@@ -136,6 +136,30 @@ helper insert_users => sub {
   return $id;
 };
 
+
+
+
+
+
+
+
+
+
+
+
+helper create_deck => sub {
+  my $c = shift;
+  my $name = shift;
+  my $userID = shift;
+  
+  my $sth = $c->dbh->prepare("INSERT INTO deck (UserID, Name) VALUES( '$userID' ,'$name');");
+  my $ret = $sth->execute or say $DBI::errstr;
+  return undef if (not defined $ret or $ret eq "E0E");
+
+  my $id = $c->get_id($name, "deck");
+  return $id;
+};
+
 helper create_user_collection => sub {
   my $c = shift;
   my $id = shift;
@@ -199,6 +223,16 @@ helper update_scraped => sub {
   return $id;
 };
 
+
+helper delete_from => sub {
+  my $c = shift;
+  my $table = shift;
+  my $where = shift;
+  my $stmt = "DELETE FROM $table WHERE $where;";
+  my $sth = $c->dbh->prepare($stmt);
+  my $ret = $sth->execute or say $DBI::errstr;
+  return $ret;
+};
 
 get '/' => sub ($c) {
   $c->render(template => 'index');
@@ -419,6 +453,8 @@ post '/login' =>  sub($c) {
     $c->redirect_to('login');
   } else {
     $c->session(user => $user);
+    my $userID = $c->get_id("$user", 'users');
+    $c->session(userID => $userID);
     $c->flash(message => 'Thanks for logging in.');
     $c->redirect_to(
       "user"
@@ -465,8 +501,74 @@ group {
   group {
     under 'deck';
     # Upload form in DATA section
-    get 'create' => 'createdeck';
-    get 'modify' => 'modifydeck';
+    get 'create' => sub ($c) {
+      $c->render(
+        error    => $c->flash('error'),
+        message  => $c->flash('message'),
+        template => 'createdeck'
+      );
+    } => 'createdeck';
+
+    post 'create' => sub($c) {
+      #https://docs.mojolicious.org/Mojolicious/Guides/Rendering#Form-validation
+      my $name = $c->param('deckname');
+      my $id = $c->session('userID') || -1;
+      $name =~ s/'/''/g;
+      my $deckID = $c->create_deck("$name",$id);
+      my $decks = $c->get_data("SELECT ID, Name FROM deck WHERE UserID == '$id';");
+      $c->session('deckID' => $deckID);
+      $c->session('decks' => $decks);
+      $c->redirect_to('modifydeck');
+    } => 'createdeck';
+
+    get 'delete' => sub ($c) {
+      my $id = $c->session('userID') || -1;
+      my $decks = $c->get_data("SELECT ID, Name FROM deck WHERE UserID == '$id';");
+      $c->session('decks' => $decks);
+      my @list = (); 
+      foreach (keys %{$decks}) {
+        push(@list, [$decks->{$_}->{'Name'} => $_]);
+      }
+      $c->render(
+        error    => $c->flash('error'),
+        message  => $c->flash('message'),
+        decks  => \@list,
+        template => 'deletedeck'
+      );
+    } => 'deletedeck';
+
+    post 'delete' => sub ($c) {
+      my $deckID = $c->param('decknames');
+      if (defined $c->session("decks")->{$deckID}) {
+        my $rc = $c->delete_from('deck', "ID == '$deckID'");
+        if ($rc) {
+          my $name =$c->session('decks')->{$deckID}->{'Name'};
+          $c->flash('message' => "successfull delete deck  $name");
+        } else {
+          my $name =$c->session('decks')->{$deckID}->{'Name'};
+          $c->flash('error' => "deck $name could not delete!");
+        }
+      } else {
+        $c->flash('error' => "access denied");
+      }
+      $c->redirect_to(
+        template => 'delete'
+      );
+    } => 'deletedeck';
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     # Multipart upload handler
     get 'watch' => 'watchdeck';
   }
@@ -629,6 +731,7 @@ __DATA__
 
 % if ($self->session('user')) {
 %= button_to "Create a deck" => 'createdeck'
+%= button_to "Delete a deck" => 'deletedeck'
 %= button_to "show deck" => 'watchdeck'
 % }
 
@@ -641,6 +744,107 @@ __DATA__
 </head>
 <body><%= content %></body>
 </html>
+
+@@ createdeck.html.ep
+% layout 'default';
+% title 'Create a Deck';
+<div class="container">
+    <div class="card col-sm-6 mx-auto">
+        <div class="card-header text-center">
+            Create Deck
+        </div>
+        <br /> <br />
+        %= form_for create => (method => 'post') => begin
+          %= input_tag 'deckname', type => 'username', id => 'deckname', placeholder => 'Enter deck name', size => "56"
+            <br /> <br />
+            %= submit_button 'Create Deck' => (class => 'btn btn-primary')
+            <br />  <br />
+        % end
+      % if ($error) {
+            <div class="error" style="color: red">
+                <small> <%= $error %> </small>
+            </div>
+        %}
+
+        % if ($message) {
+            <div class="error" style="color: green">
+                <small> <%= $message %> </small>
+            </div>
+        %}
+    </div>
+
+</div>
+
+@@ deletedeck.html.ep
+% layout 'default';
+% title 'Delete a Deck';
+
+
+<div class="container">
+    <div class="card col-sm-6 mx-auto">
+        <div class="card-header text-center">
+            Delete Deck
+        </div>
+        <br /> <br />
+        %= form_for deletedeck => (method => 'post') => begin
+        %= select_field decknames => $decks
+            <br /> <br />
+            %= submit_button 'Delete Deck' => (class => 'btn btn-primary')
+            <br />  <br />
+        % end
+      % if ($error) {
+            <div class="error" style="color: red">
+                <small> <%= $error %> </small>
+            </div>
+        %}
+
+        % if ($message) {
+            <div class="error" style="color: green">
+                <small> <%= $message %> </small>
+            </div>
+        %}
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 @@ register.html.ep
 % layout 'default';
