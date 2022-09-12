@@ -455,6 +455,8 @@ post '/login' =>  sub($c) {
     $c->session(user => $user);
     my $userID = $c->get_id("$user", 'users');
     $c->session(userID => $userID);
+    my $decks = $c->get_data("SELECT ID, Name FROM deck WHERE UserID == '$userID';");
+    $c->session(decks => $decks);
     $c->flash(message => 'Thanks for logging in.');
     $c->redirect_to(
       "user"
@@ -542,10 +544,10 @@ group {
       if (defined $c->session("decks")->{$deckID}) {
         my $rc = $c->delete_from('deck', "ID == '$deckID'");
         if ($rc) {
-          my $name =$c->session('decks')->{$deckID}->{'Name'};
+          my $name = $c->session('decks')->{$deckID}->{'Name'};
           $c->flash('message' => "successfull delete deck  $name");
         } else {
-          my $name =$c->session('decks')->{$deckID}->{'Name'};
+          my $name = $c->session('decks')->{$deckID}->{'Name'};
           $c->flash('error' => "deck $name could not delete!");
         }
       } else {
@@ -556,18 +558,20 @@ group {
       );
     } => 'deletedeck';
 
+    get 'modify' => sub ($c){
+      my $decks = $c->session('decks');
+      my @list = (); 
+      foreach (keys %{$decks}) {
+        push(@list, [$decks->{$_}->{'Name'} => $_]);
+      }
 
-
-
-
-
-
-
-
-
-
-
-
+      $c->render(
+        error    => $c->flash('error'),
+        message  => $c->flash('message'),
+        decks  => \@list,
+        template => 'modifydeck'
+      );
+    } => 'modifydeck';
 
     # Multipart upload handler
     get 'watch' => 'watchdeck';
@@ -583,6 +587,7 @@ group {
   # Multipart upload handler
   post 'upload' => sub ($c) {
 
+      #https://docs.mojolicious.org/Mojolicious/Guides/Rendering#Form-validation
     # Check file size
     return $c->render(text => 'File is too big.', status => 200) if $c->req->is_limit_exceeded;
 
@@ -658,8 +663,16 @@ get '/watch' =>  sub($c) {
 };
 
 websocket '/watch/ws' =>  sub($c) {
-  my $rows = $c->get_data('SELECT ID, Image, Name, Type, Oracle, ManaCost FROM mtg;');
+  my $stmt = "";
+  if ($c->session('user')) {
+    my $userid = $c->get_id($c->session('user'),"users");
+    $stmt = "SELECT mtg.ID AS ID, Image, Name, Type, Oracle, ManaCost , Count FROM mtg INNER JOIN user_collection_$userid AS B ON mtg.ID = B.ID;";
+  } else {
+    $stmt = 'SELECT ID, Image, Name, Type, Oracle, ManaCost FROM mtg;';
+  }
+  my $rows = $c->get_data($stmt);
   my $rows_size = keys %{$rows};
+  $rows_size += 1;
 
 
   # Opened
@@ -676,6 +689,7 @@ websocket '/watch/ws' =>  sub($c) {
   # Increase inactivity timeout for connection a bit
   $c->inactivity_timeout(360);
 
+  # TODO not all data was print
   # Incoming message
   $c->on(message => sub ($c, $rcvmsg) {
       my $rmsg = decode_json($rcvmsg);
@@ -733,6 +747,7 @@ __DATA__
 %= button_to "Create a deck" => 'createdeck'
 %= button_to "Delete a deck" => 'deletedeck'
 %= button_to "show deck" => 'watchdeck'
+%= button_to "Modify Deck" => 'modifydeck'
 % }
 
 @@ layouts/default.html.ep
@@ -807,44 +822,204 @@ __DATA__
 
 </div>
 
+@@ modifydeck.html.ep
+% layout 'default';
+% title 'Modify a Deck';
+<script>
+var ws = new WebSocket('<%= url_for('watchws')->to_abs %>');
+var msg = {"type":"database", "count":0, "data":null };
+console.info(JSON.stringify(msg));
 
+// Incoming messages
+ws.onmessage = function (event) {
+json = JSON.parse(event.data);
 
+msg.type = json.type;
+msg.count = json.count;
+msg.data = null;
+if ("database" == json.type) {
+addRow(json.data);
+ws.send(JSON.stringify(msg));
+}
+};
 
+// Outgoing messages
+ws.onopen = function (event) {
+ws.send(JSON.stringify(msg));
+};
 
+function addRow(jsonContent)
+{
+  if (!document.getElementsByTagName) return;
+  if (!document.getElementById) return;
+  tabBody=document.getElementById("cardTBody");
+  for (i = 0; i < jsonContent.length; i++) {
+    row = document.createElement("tr");
+    row.id = "row-"+jsonContent[i].ID;
+    cellImage = document.createElement("td");
+    textImage = document.createElement("img");
+    textImage.src='data:image/jpg;base64,'+jsonContent[i].Image;
+    textImage.alt=jsonContent[i].Name;
+    textImage.width="128";
+    cellImage.appendChild(textImage);
+    row.appendChild(cellImage);
 
+    cellName = document.createElement("td");
+    textName = document.createTextNode(jsonContent[i].Name);
+    cellName.appendChild(textName);
+    row.appendChild(cellName);
 
+    cellType = document.createElement("td");
+    textType = document.createTextNode(jsonContent[i].Type.replace(/Ã¢ÂÂ/g,'-'));
+    cellType.appendChild(textType);
+    row.appendChild(cellType);
 
+    cellManaCost = document.createElement("td");
+    textManaCost = document.createTextNode(jsonContent[i].ManaCost);
+    cellManaCost.appendChild(textManaCost);
+    row.appendChild(cellManaCost);
 
+    cellOracle = document.createElement("td");
+    textOracle = document.createTextNode(jsonContent[i].Oracle.replace(/Ã¢ÂÂ/g,'-').replace(/Ã¢ÂÂ¢/g,'"'));
+    cellOracle.appendChild(textOracle);
+    row.appendChild(cellOracle);
 
+    cellChoice = document.createElement("td");
+    formChoice = document.createElement("form");
+    checkboxChoice = document.createElement('input');
+    checkboxChoice.type = "checkbox";
+    checkboxChoice.name = "checkboxChoice";
+    checkboxChoice.id = "checkboxChoice-"+jsonContent[i].ID;
+    checkboxChoice.addEventListener('change', (event) => {
+        const myrow = event.currentTarget.parentNode.parentNode.parentNode;
+        deckTBody=document.getElementById("deckTBody");
+        if (event.currentTarget.checked) {
+          document.getElementById("deckTBody").appendChild(myrow);
+        } else {
+          document.getElementById("cardTBody").appendChild(myrow);
+        }
+      })
+    formChoice.appendChild(checkboxChoice);
+    cellChoice.appendChild(formChoice);
+    row.appendChild(cellChoice);
 
+    cellCount = document.createElement("td");
+    inputCount = document.createElement('input');
+    inputCount.type = "number";
+    inputCount.value = "1";
+    inputCount.id = "inputCardAmount";
+    inputCount.size = 1;
+    inputCount.max = 4;
+    inputCount.min = 0;
+    cellCount.appendChild(inputCount);
+    row.appendChild(cellCount);
 
+    tabBody.appendChild(row);
+  }
 
+};
 
+const searchopt = {
+  "Oracle" : 4,
+  "ManaCost": 3,
+  "Type": 2,
+  "Name": 1
+}
 
+function searchCards(key) {
+  // Declare variables
+  var input, filter, table, tr, td, i, txtValue;
+  input = document.getElementById("search"+key);
+  filter = input.value.toUpperCase();
+  table = document.getElementById("collectionTable");
+  tr = table.getElementsByTagName("tr");
 
+  // Loop through all table rows, and hide those who don't match the search query
+  for (i = 0; i < tr.length; i++) {
+    td = tr[i].getElementsByTagName("td")[searchopt[key]];
+    if (td) {
+      txtValue = td.textContent || td.innerText;
+      if (txtValue.toUpperCase().indexOf(filter) > -1) {
+        tr[i].style.display = "";
+      } else {
+        tr[i].style.display = "none";
+      }
+    }
+  }
+};
+</script>
+<form>
+<input type="checkbox" name="checkboxChoice" id="checkboxChoice-test" onmouseover="alert();">
+</form>
+<div class="container">
+    <div class="card col-sm-6 mx-auto">
+        <div class="card-header text-center">
+            Modify Deck
+        </div>
+        %= form_for modifydeck => begin
+        %= select_field decknames => $decks
+            %= submit_button 'modify Deck' => (class => 'btn btn-primary')
+        % end
+        %= t 'br'
+        %= t 'br'
+        % if ($error) {
+            <div class="error" style="color: red">
+                <small> <%= $error %> </small>
+            </div>
+        %}
 
+        % if ($message) {
+            <div class="error" style="color: green">
+                <small> <%= $message %> </small>
+            </div>
+        %}
+    </div>
+</div>
+<div style="top: 0; width: 100%; padding: 5px; padding-top: 25px;">
+<input type="text" id="searchType" onkeyup="searchDeck('Type')" placeholder="Search for type..">
+<input type="text" id="searchOracle" onkeyup="searchDeck('Oracle')" placeholder="Search for oracle..">
+</div>
 
+<div style="padding-top: 5px;">
+<table id="deckTable" style="width:100%">
+<tbody>
+<tr>
+<th id="deckCardImage" scope="col">Image</th>
+<th id="deckCardName" scope="col">Name</th>
+<th id="deckCardType" scope="col">Type</th>
+<th id="deckCardMana" scope="col">Mana Costs</th>
+<th id="deckCardOracle" scope="col">Oracle</th>
+<th id="deckCardChoice" scope="col">Choice</th>
+<th id="deckCardCount" scope="col">Count</th>
+</tr>
+</tbody>
+<tbody id="deckTBody">
+</tbody>
+</table>
+</div>
 
+<div style="top: 0; width: 100%; padding: 5px; padding-top: 25px;">
+<input type="text" id="searchType" onkeyup="searchCards('Type')" placeholder="Search for type..">
+<input type="text" id="searchOracle" onkeyup="searchCards('Oracle')" placeholder="Search for oracle..">
+</div>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+<div style="padding-top: 5px;">
+<table id="collectionTable" style="width:100%">
+<tbody>
+<tr>
+<th id="cardImage" scope="col">Image</th>
+<th id="cardName" scope="col">Name</th>
+<th id="cardType" scope="col">Type</th>
+<th id="cardMana" scope="col">Mana Costs</th>
+<th id="cardOracle" scope="col">Oracle</th>
+<th id="cardChoice" scope="col">Choice</th>
+<th id="cardCount" scope="col">Count</th>
+</tr>
+</tbody>
+<tbody id="cardTBody">
+</tbody>
+</table>
+</div>
 
 @@ register.html.ep
 % layout 'default';
@@ -988,9 +1163,11 @@ ws.send(JSON.stringify(msg));
 function addRow(jsonContent)
 {
   if (!document.getElementsByTagName) return;
-  tabBody=document.getElementsById("cardTBody").item(0);
+  if (!document.getElementById) return;
+  tabBody=document.getElementById("cardTBody");
   for (i = 0; i < jsonContent.length; i++) {
     row = document.createElement("tr");
+    row.id = jsonContent[i].ID;
     cellImage = document.createElement("td");
     textImage = document.createElement("img");
     textImage.src='data:image/jpg;base64,'+jsonContent[i].Image;
