@@ -160,6 +160,27 @@ helper create_deck => sub {
   return $id;
 };
 
+helper modify_deck => sub {
+  my $c = shift;
+  my $deckID = shift;
+  my $cardID = shift;
+  my $amount = shift;
+  my $userID = $c->session('userID') || undef;
+
+  return undef unless (defined $userID);
+
+  my $stmt = "";
+  my $res = $c->get_data("SELECT ID FROM user_deck_$userID WHERE ID = '$deckID' AND cardID = '$cardID';");
+  if (defined $res and defined $res->{$deckID}) {
+    $stmt = "UPDATE user_deck_$userID SET Count = '$amount' WHERE ID = '$deckID' AND cardID = '$cardID';";
+  } else {
+    $stmt = "INSERT INTO user_deck_$userID (ID, cardID, Count) VALUES('$deckID', '$cardID', '$amount');";
+  }
+  my $sth = $c->dbh->prepare($stmt);
+  my $ret = $sth->execute or say $DBI::errstr;
+  return undef if (not defined $ret or $ret eq "E0E");
+};
+
 helper create_user_collection => sub {
   my $c = shift;
   my $id = shift;
@@ -723,6 +744,15 @@ websocket '/watch/ws' =>  sub($c) {
 
         $msg->{data} = [ @part ];
       };
+
+      if ("$rmsg->{type}" eq "modifydeck") {
+        my @deckID = (keys %{$rmsg->{data}});
+        foreach my $cardID ( keys %{$rmsg->{data}->{$deckID[0]}}) {
+          my $amount = $rmsg->{data}->{$deckID[0]}->{$cardID};
+          $c->modify_deck($deckID[0],$cardID,$amount);
+        }
+      }
+
       $c->send(encode_json($msg));
     });
 
@@ -839,15 +869,21 @@ console.info(JSON.stringify(msg));
 
 // Incoming messages
 ws.onmessage = function (event) {
-json = JSON.parse(event.data);
+  json = JSON.parse(event.data);
+  
 
-msg.type = json.type;
-msg.count = json.count;
-msg.data = null;
-if ("database" == json.type) {
-addRow(json.data);
-ws.send(JSON.stringify(msg));
-}
+  msg.type = json.type;
+  msg.count = json.count;
+  msg.data = null;
+  if ("database" == json.type) {
+    addRow(json.data, "cardTBody");
+    ws.send(JSON.stringify(msg));
+  }
+  if ("deck" == json.type) {
+    //checkboxChoice.id = "checkboxChoice-"+jsonContent[i].ID;
+    //inputCount.value = "1";
+    //inputCount.id = "inputCardAmount-"+jsonContent[i].ID;
+  }
 };
 
 // Outgoing messages
@@ -855,11 +891,12 @@ ws.onopen = function (event) {
   ws.send(JSON.stringify(msg));
 };
 
-function addRow(jsonContent)
+function addRow(jsonContent, tableBody)
 {
   if (!document.getElementsByTagName) return;
   if (!document.getElementById) return;
-  tabBody=document.getElementById("cardTBody");
+  tabBody=document.getElementById(tableBody);
+
   for (i = 0; i < jsonContent.length; i++) {
     row = document.createElement("tr");
     row.id = jsonContent[i].ID;
