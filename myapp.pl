@@ -255,7 +255,8 @@ our $scrapeTimerID = Mojo::IOLoop->recurring(75 => sub ($loop) {
     $scrapeSubprocess->on(cleanup => sub ($subprocess) { say "Process $$ is about to exit" });
     # Fine grained response handling (dies on connection errors)
     $scrapeSubprocess = $scrapeSubprocess->run( sub ($subprocess) {
-        my $rows = app->get_data('SELECT ID, Name FROM mtg WHERE Rawdata IS NULL LIMIT 10');
+        # XXX autoconfigure  LIMIT from network speed
+        my $rows = app->get_data('SELECT ID, Name FROM mtg WHERE Rawdata IS NULL LIMIT 15');
         foreach my $key (keys %{$rows}) {
           my $id = $rows->{$key}->{'ID'};
           my $name = $rows->{$key}->{'Name'};
@@ -281,6 +282,7 @@ helper process_scrape => sub {
   $ua = $ua->connect_timeout(30)->request_timeout(45);
 
   my $xpath = 'div[class=toolbox-column] > ul[class=toolbox-links] > li > a > b';
+  say "search on scryfall";
   my $res = $ua->max_redirects(2)->get("https://scryfall.com/search?q=$name")->result;
   print "fetched anchore child \n";
   my $toolboxLinks = $res->dom->find($xpath);
@@ -414,7 +416,7 @@ post '/register' => sub($c) {
     }
     else {
       $c->flash( message => 'User added to the database successfully.');
-      $c->redirect_to('register');
+      $c->redirect_to('login');
     }
   }
   else {
@@ -594,7 +596,8 @@ group {
     # Process uploaded file
     return $c->redirect_to('form') unless my $collection = $c->param('collection');
 
-    import_collection($c, $collection) 
+    import_collection($c, $collection);
+    $c->redirect_to('user');
   };
 };
 
@@ -615,8 +618,12 @@ sub import_collection {
 
           my @fields = $csv->fields();
           push(@{$matrix->{$sum}}, $csv->fields());
-          $matrix->{$sum}[2] =~ s/'/''/;
-          $matrix->{$sum}[3] =~ s/'/''/;
+          for (my $idx = 0; $idx < length($matrix->{$sum}); $idx++) {
+            continue unless ($matrix->{$sum}[$idx]);
+            $matrix->{$sum}[$idx] =~ s/'/''/;
+            $matrix->{$sum}[$idx] =~ s/Ã¢ÂÂ/-/g;
+            $matrix->{$sum}[$idx] =~ s/Ã¢ÂÂ¢/"/g;
+          }
         } else {
           warn "Line could not be parsed: $line\n";
           $subproc->progress({ text => "Line could not be parsed: $line"})
@@ -708,8 +715,8 @@ websocket '/watch/ws' =>  sub($c) {
         my @part;
         foreach $_ ($rmsg->{count}+1 .. $rmsg->{count}+10) {
           push @part, { %{$rows->{$_}} } if defined $rows->{$_};
-          if ($_ gt $rows_size) {
-            $msg->{type => "databaseend"};
+          if ($_ > $rows_size) {
+            $msg->{type} = "databaseend";
             last;
           };
         };
@@ -845,7 +852,7 @@ ws.send(JSON.stringify(msg));
 
 // Outgoing messages
 ws.onopen = function (event) {
-ws.send(JSON.stringify(msg));
+  ws.send(JSON.stringify(msg));
 };
 
 function addRow(jsonContent)
@@ -855,7 +862,8 @@ function addRow(jsonContent)
   tabBody=document.getElementById("cardTBody");
   for (i = 0; i < jsonContent.length; i++) {
     row = document.createElement("tr");
-    row.id = "row-"+jsonContent[i].ID;
+    row.id = jsonContent[i].ID;
+
     cellImage = document.createElement("td");
     textImage = document.createElement("img");
     textImage.src='data:image/jpg;base64,'+jsonContent[i].Image;
@@ -870,7 +878,7 @@ function addRow(jsonContent)
     row.appendChild(cellName);
 
     cellType = document.createElement("td");
-    textType = document.createTextNode(jsonContent[i].Type.replace(/Ã¢ÂÂ/g,'-'));
+    textType = document.createTextNode(jsonContent[i].Type?.replace(/Ã¢ÂÂ/g,'-'));
     cellType.appendChild(textType);
     row.appendChild(cellType);
 
@@ -880,7 +888,7 @@ function addRow(jsonContent)
     row.appendChild(cellManaCost);
 
     cellOracle = document.createElement("td");
-    textOracle = document.createTextNode(jsonContent[i].Oracle.replace(/Ã¢ÂÂ/g,'-').replace(/Ã¢ÂÂ¢/g,'"'));
+    textOracle = document.createTextNode(jsonContent[i].Oracle?.replace(/Ã¢ÂÂ/g,'-').replace(/Ã¢ÂÂ¢/g,'"'));
     cellOracle.appendChild(textOracle);
     row.appendChild(cellOracle);
 
@@ -907,7 +915,7 @@ function addRow(jsonContent)
     inputCount = document.createElement('input');
     inputCount.type = "number";
     inputCount.value = "1";
-    inputCount.id = "inputCardAmount";
+    inputCount.id = "inputCardAmount-"+jsonContent[i].ID;
     inputCount.size = 1;
     inputCount.max = 4;
     inputCount.min = 0;
@@ -947,18 +955,33 @@ function searchCards(key) {
     }
   }
 };
+
+function modifydeck() {
+  var json = {};
+
+  const deckID = document.getElementById("decknames").value;
+  const deck = document.getElementById("deckTBody")?.childNodes;
+  
+  json = {[deckID] : {}} 
+  for (let idx = 1; idx < deck.length; idx++) {
+    cardID = deck[idx].id;
+    const amount = document.getElementById("inputCardAmount-"+cardID).value;
+    json[deckID] = Object.assign(json[deckID], { [cardID] : amount })
+  }
+  msg = { type: "modifydeck", data : json };
+  ws.send(JSON.stringify(msg));
+}
+
 </script>
-<form>
-<input type="checkbox" name="checkboxChoice" id="checkboxChoice-test" onmouseover="alert();">
-</form>
+
 <div class="container">
     <div class="card col-sm-6 mx-auto">
         <div class="card-header text-center">
             Modify Deck
         </div>
-        %= form_for modifydeck => begin
-        %= select_field decknames => $decks
-            %= submit_button 'modify Deck' => (class => 'btn btn-primary')
+        %= form_for "#" => ( onsubmit=>"modifydeck()" ) => begin
+          %= select_field decknames  => $decks, id => 'decknames'
+          %= submit_button 'modify Deck' => (class => 'btn btn-primary')
         % end
         %= t 'br'
         %= t 'br'
