@@ -10,6 +10,7 @@ use Mojo::UserAgent;
 use Mojo::JSON qw(decode_json encode_json);
 use Text::CSV;
 use Crypt::PBKDF2;
+use List::Util qw(max);
 
 use DBI;
 
@@ -70,7 +71,7 @@ helper dbcreate => sub {
           #Var DBI::errstr ist in diesem Kontext unbekannt
           print "DBI Error (rv lt 0)\n";
         } else {
-          print $key . ' ' . $table . " created successfully\n";
+          say $key . ' ' . $table . " created successfully";
         }
       }
     }
@@ -89,7 +90,29 @@ helper get_data => sub {
     return $rows;
   }
   return undef;
+};
 
+helper get_datalist => sub {
+  my $c = shift;
+  my $stmt = shift;
+
+  my $sth = $c->dbh->prepare("$stmt");
+
+  $sth->execute or die $DBI::errstr;
+  if (defined $sth) {
+    my $res = undef;
+    while (my $row =  $sth->fetchrow_hashref()) {
+      if (defined $res->{$row->{ID}}) {
+        push (@{$res->{$row->{ID}}}, $row);
+      } else {
+        $res->{$row->{ID}} = [];
+        push (@{$res->{$row->{ID}}}, $row);
+      }
+    }
+    $sth->finish();
+    return $res;
+  }
+  return undef;
 };
 
 helper get_id => sub {
@@ -170,7 +193,8 @@ helper modify_deck => sub {
   return undef unless (defined $userID);
 
   my $stmt = "";
-  my $res = $c->get_data("SELECT ID FROM user_deck_$userID WHERE ID = '$deckID' AND cardID = '$cardID';");
+  my $res = $c->get_datalist("SELECT ID, cardID  FROM user_deck_$userID WHERE ID = '$deckID' AND cardID = '$cardID';");
+  # TODO DELETE obsolate cards
   if (defined $res and defined $res->{$deckID}) {
     $stmt = "UPDATE user_deck_$userID SET Count = '$amount' WHERE ID = '$deckID' AND cardID = '$cardID';";
   } else {
@@ -243,7 +267,6 @@ helper update_scraped => sub {
 
   return $id;
 };
-
 
 helper delete_from => sub {
   my $c = shift;
@@ -699,8 +722,7 @@ websocket '/watch/ws' =>  sub($c) {
     $stmt = 'SELECT ID, Image, Name, Type, Oracle, ManaCost FROM mtg;';
   }
   my $rows = $c->get_data($stmt);
-  my $rows_size = keys %{$rows};
-  $rows_size += 1;
+  my $rows_size = max(keys %{$rows})+20;
 
 
   # Opened
@@ -731,10 +753,10 @@ websocket '/watch/ws' =>  sub($c) {
         $msg = {
           type => "database",
           data => undef,
-          count => $rmsg->{count}+10
+          count => $rmsg->{count}+20
         };
         my @part;
-        foreach $_ ($rmsg->{count}+1 .. $rmsg->{count}+10) {
+        foreach $_ ($rmsg->{count}+1 .. $rmsg->{count}+20) {
           push @part, { %{$rows->{$_}} } if defined $rows->{$_};
           if ($_ > $rows_size) {
             $msg->{type} = "databaseend";
@@ -744,6 +766,14 @@ websocket '/watch/ws' =>  sub($c) {
 
         $msg->{data} = [ @part ];
       };
+
+      if ("$rmsg->{type}" eq "deck") {
+        my $userID = $c->session('userID');
+        my $decks = $c->get_datalist("SELECT ID, cardID, Count FROM user_deck_$userID;");
+        $msg->{type} = "deck";
+        $msg->{data} = $decks;
+
+      }
 
       if ("$rmsg->{type}" eq "modifydeck") {
         my @deckID = (keys %{$rmsg->{data}});
@@ -871,7 +901,6 @@ console.info(JSON.stringify(msg));
 ws.onmessage = function (event) {
   json = JSON.parse(event.data);
   
-
   msg.type = json.type;
   msg.count = json.count;
   msg.data = null;
@@ -879,10 +908,26 @@ ws.onmessage = function (event) {
     addRow(json.data, "cardTBody");
     ws.send(JSON.stringify(msg));
   }
+  if ("databaseend" == json.type) {
+    msg.type = "deck";
+    msg.count = null;
+    ws.send(JSON.stringify(msg));
+  }
   if ("deck" == json.type) {
-    //checkboxChoice.id = "checkboxChoice-"+jsonContent[i].ID;
-    //inputCount.value = "1";
-    //inputCount.id = "inputCardAmount-"+jsonContent[i].ID;
+    for (const deckID in json.data ) {
+      var decknames =document.getElementById("decknames");
+      if (decknames.value != deckID) {continue;};
+      for (var idx = 0; idx < json.data[deckID].length; idx++) {
+        const cardID = json.data[deckID][idx].cardID;
+        const  amount = json.data[deckID][idx].Count;
+        var inputCount =document.getElementById("inputCardAmount-"+cardID);
+        inputCount.value = amount;
+        var checkboxChoice =document.getElementById("checkboxChoice-"+cardID);
+        checkboxChoice.checked = true;
+        let event = new Event('change');
+        checkboxChoice.dispatchEvent(event);
+      }
+    }
   }
 };
 
