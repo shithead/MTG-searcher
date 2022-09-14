@@ -12,6 +12,12 @@ Attention this is high developed Project.
   * register, login, logout works, nothing else
   * add and remove deck table entry
 
+## devdependencies
+
+  * autoconf
+  * clang/gcc
+  * gnumake
+
 ## dependencies
 
 ### programms

@@ -724,7 +724,6 @@ websocket '/watch/ws' =>  sub($c) {
   my $rows = $c->get_data($stmt);
   my $rows_size = max(keys %{$rows})+20;
 
-
   # Opened
   $c->app->log->debug('WebSocket opened');
   $c->on(open => sub($c, $msg){
@@ -757,7 +756,7 @@ websocket '/watch/ws' =>  sub($c) {
         };
         my @part;
         foreach $_ ($rmsg->{count}+1 .. $rmsg->{count}+20) {
-          push @part, { %{$rows->{$_}} } if defined $rows->{$_};
+          push @part, { %{$rows->{$_}} } if (defined $rows->{$_});
           if ($_ > $rows_size) {
             $msg->{type} = "databaseend";
             last;
