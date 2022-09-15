@@ -81,12 +81,14 @@ helper dbcreate => sub {
 helper get_data => sub {
   my $c = shift;
   my $stmt = shift;
+  my $orderByKey = shift || 'ID';
 
   my $sth = $c->dbh->prepare("$stmt");
 
   $sth->execute or die $DBI::errstr;
   if (defined $sth) {
-    my $rows =  $sth->fetchall_hashref('ID');
+    my $rows =  $sth->fetchall_hashref($orderByKey);
+    $sth->finish();
     return $rows;
   }
   return undef;
@@ -95,24 +97,15 @@ helper get_data => sub {
 helper get_datalist => sub {
   my $c = shift;
   my $stmt = shift;
+  my $orderByKey =  shift || [ 'ID', 'Name' ];
 
-  my $sth = $c->dbh->prepare("$stmt");
-
-  $sth->execute or die $DBI::errstr;
-  if (defined $sth) {
-    my $res = undef;
-    while (my $row =  $sth->fetchrow_hashref()) {
-      if (defined $res->{$row->{ID}}) {
-        push (@{$res->{$row->{ID}}}, $row);
-      } else {
-        $res->{$row->{ID}} = [];
-        push (@{$res->{$row->{ID}}}, $row);
-      }
-    }
-    $sth->finish();
-    return $res;
+  my $data = $c->get_data($stmt, ${$orderByKey}[1]);
+  my $res = {};
+  foreach my $cardID (keys %{$data}) {
+    my $deckID = $data->{$cardID}->{${$orderByKey}[0]};
+    $res->{$deckID}->{$cardID} = $data->{$cardID};
   }
-  return undef;
+  return $res;
 };
 
 helper get_id => sub {
@@ -185,24 +178,38 @@ helper create_deck => sub {
 
 helper modify_deck => sub {
   my $c = shift;
-  my $deckID = shift;
-  my $cardID = shift;
-  my $amount = shift;
-  my $userID = $c->session('userID') || undef;
+  my $jsonData = shift;
 
+  my $userID = $c->session('userID') || undef;
   return undef unless (defined $userID);
+  my $deckID = (keys %{$jsonData})[0];
+  my $res = $c->get_data("SELECT ID, cardID  FROM user_deck_$userID WHERE ID = '$deckID';", 'cardID');
 
   my $stmt = "";
-  my $res = $c->get_datalist("SELECT ID, cardID  FROM user_deck_$userID WHERE ID = '$deckID' AND cardID = '$cardID';");
-  # TODO DELETE obsolate cards
-  if (defined $res and defined $res->{$deckID}) {
-    $stmt = "UPDATE user_deck_$userID SET Count = '$amount' WHERE ID = '$deckID' AND cardID = '$cardID';";
-  } else {
-    $stmt = "INSERT INTO user_deck_$userID (ID, cardID, Count) VALUES('$deckID', '$cardID', '$amount');";
+  foreach my $cardID ( keys %{$jsonData->{$deckID}}) {
+    my $amount = $jsonData->{$deckID}->{$cardID};
+
+    # TODO DELETE obsolate cards
+    if (defined $res and exists $res->{$cardID}) {
+      $stmt = "UPDATE user_deck_$userID SET Count = '$amount' WHERE ID = '$deckID' AND cardID = '$cardID';";
+    } else {
+      $stmt = "INSERT INTO user_deck_$userID (ID, cardID, Count) VALUES('$deckID', '$cardID', '$amount');";
+    }
+    my $sth = $c->dbh->prepare($stmt);
+    return -1 unless defined $sth;
+    my $ret = $sth->execute or say $DBI::errstr;
+    $sth->finish();
+    delete $res->{$cardID};
   }
-  my $sth = $c->dbh->prepare($stmt);
-  my $ret = $sth->execute or say $DBI::errstr;
-  return undef if (not defined $ret or $ret eq "E0E");
+
+  foreach my $cardID ( keys %{$res}) {
+    my $stmt = "DELETE FROM user_deck_$userID WHERE ID = '$deckID' and cardID = '$cardID';";
+    my $sth = $c->dbh->prepare($stmt);
+    return -1 unless defined $sth;
+    my $ret = $sth->execute or say $DBI::errstr;
+    $sth->finish();
+  }
+  #return undef if (not defined $ret or $ret eq "E0E");
 };
 
 helper create_user_collection => sub {
@@ -768,18 +775,15 @@ websocket '/watch/ws' =>  sub($c) {
 
       if ("$rmsg->{type}" eq "deck") {
         my $userID = $c->session('userID');
-        my $decks = $c->get_datalist("SELECT ID, cardID, Count FROM user_deck_$userID;");
+        my @orderByKeys = ('ID', 'cardID');
+        my $decks = $c->get_datalist("SELECT ID, cardID, Count FROM user_deck_$userID;", \@orderByKeys);
         $msg->{type} = "deck";
         $msg->{data} = $decks;
-
+        #p $msg;
       }
 
       if ("$rmsg->{type}" eq "modifydeck") {
-        my @deckID = (keys %{$rmsg->{data}});
-        foreach my $cardID ( keys %{$rmsg->{data}->{$deckID[0]}}) {
-          my $amount = $rmsg->{data}->{$deckID[0]}->{$cardID};
-          $c->modify_deck($deckID[0],$cardID,$amount);
-        }
+          $c->modify_deck($rmsg->{data});
       }
 
       $c->send(encode_json($msg));
@@ -916,9 +920,9 @@ ws.onmessage = function (event) {
     for (const deckID in json.data ) {
       var decknames =document.getElementById("decknames");
       if (decknames.value != deckID) {continue;};
-      for (var idx = 0; idx < json.data[deckID].length; idx++) {
-        const cardID = json.data[deckID][idx].cardID;
-        const  amount = json.data[deckID][idx].Count;
+      for (const cardID in json.data[deckID]) {
+
+        const  amount = json.data[deckID][cardID].Count;
         var inputCount =document.getElementById("inputCardAmount-"+cardID);
         inputCount.value = amount;
         var checkboxChoice =document.getElementById("checkboxChoice-"+cardID);
