@@ -102,8 +102,7 @@ helper get_datalist => sub {
   my $data = $c->get_data($stmt, ${$orderByKey}[1]);
   my $res = {};
   foreach my $cardID (keys %{$data}) {
-    my $deckID = $data->{$cardID}->{${$orderByKey}[0]};
-    $res->{$deckID}->{$cardID} = $data->{$cardID};
+    $res->{$data->{$cardID}->{${$orderByKey}[0]}}->{$cardID} = $data->{$cardID};
   }
   return $res;
 };
@@ -189,7 +188,6 @@ helper modify_deck => sub {
   foreach my $cardID ( keys %{$jsonData->{$deckID}}) {
     my $amount = $jsonData->{$deckID}->{$cardID};
 
-    # TODO DELETE obsolate cards
     if (defined $res and exists $res->{$cardID}) {
       $stmt = "UPDATE user_deck_$userID SET Count = '$amount' WHERE ID = '$deckID' AND cardID = '$cardID';";
     } else {
@@ -779,7 +777,6 @@ websocket '/watch/ws' =>  sub($c) {
         my $decks = $c->get_datalist("SELECT ID, cardID, Count FROM user_deck_$userID;", \@orderByKeys);
         $msg->{type} = "deck";
         $msg->{data} = $decks;
-        #p $msg;
       }
 
       if ("$rmsg->{type}" eq "modifydeck") {
@@ -921,7 +918,6 @@ ws.onmessage = function (event) {
       var decknames =document.getElementById("decknames");
       if (decknames.value != deckID) {continue;};
       for (const cardID in json.data[deckID]) {
-
         const  amount = json.data[deckID][cardID].Count;
         var inputCount =document.getElementById("inputCardAmount-"+cardID);
         inputCount.value = amount;
