@@ -993,8 +993,12 @@ function addRow(jsonContent, tableBody)
     inputCount.type = "number";
     inputCount.value = "1";
     inputCount.id = "inputCardAmount-"+jsonContent[i].ID;
-    inputCount.size = 1;
-    inputCount.max = 4;
+    inputCount.size = 3;
+    if (! jsonContent[i].Type?.includes("Basic Land")) {
+      inputCount.max = 4;
+    } else {
+      inputCount.max = 99;
+    }
     inputCount.min = 0;
     cellCount.appendChild(inputCount);
     row.appendChild(cellCount);
