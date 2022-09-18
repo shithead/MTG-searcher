@@ -553,7 +553,6 @@ group {
   get '/' => 'index';
   group {
     under 'deck';
-    # Upload form in DATA section
     get 'create' => sub ($c) {
       $c->render(
         error    => $c->flash('error'),
@@ -624,7 +623,6 @@ group {
       );
     } => 'modifydeck';
 
-    # Multipart upload handler
     get 'watch' => 'watchdeck';
   }
 };
@@ -645,15 +643,11 @@ group {
     # Process uploaded file
     return $c->redirect_to('form') unless my $collection = $c->param('collection');
 
-    import_collection($c, $collection);
-    $c->redirect_to('user');
+    $c->import_collection($collection);
   };
 };
 
-sub import_collection {
-  my $c = shift;
-  my $collection = shift;
-
+helper import_collection => sub($c, $collection) {
 
   my $subprocImportCollection = Mojo::IOLoop::Subprocess->new;
   my $promise = $subprocImportCollection->run_p( sub($subproc) {
@@ -668,10 +662,11 @@ sub import_collection {
           my @fields = $csv->fields();
           push(@{$matrix->{$sum}}, $csv->fields());
           for (my $idx = 0; $idx < length($matrix->{$sum}); $idx++) {
-            continue unless ($matrix->{$sum}[$idx]);
-            $matrix->{$sum}[$idx] =~ s/'/''/;
-            $matrix->{$sum}[$idx] =~ s/Ã¢ÂÂ/-/g;
-            $matrix->{$sum}[$idx] =~ s/Ã¢ÂÂ¢/"/g;
+            if ($matrix->{$sum}[$idx]) {
+              $matrix->{$sum}[$idx] =~ s/'/''/;
+              $matrix->{$sum}[$idx] =~ s/Ã¢ÂÂ/-/g;
+              $matrix->{$sum}[$idx] =~ s/Ã¢ÂÂ¢/"/g;
+            }
           }
         } else {
           warn "Line could not be parsed: $line\n";
@@ -709,10 +704,11 @@ sub import_collection {
     })->then(sub ($matrix) {
       $c->render(json => $matrix);
     })->catch(sub ($err) {
-      $c->render( text => $err )
+      say $err;
+      $c->render( text => 'Internal Server Error! see log' )
     })->wait;
 
-}
+};
 
 get '/watch' =>  sub($c) {
   $c->render(template => 'watch');
