@@ -147,6 +147,8 @@ helper insert_users => sub {
   return undef if (not defined $ret or $ret eq "E0E");
   $ret = $c->create_user_deck($id);
   return undef if (not defined $ret or $ret eq "E0E");
+  $ret = $c->trigger_user_deck($id);
+  return undef if (not defined $ret or $ret eq "E0E");
 
   return $id;
 };
@@ -243,6 +245,47 @@ helper create_user_deck => sub {
     );";
   my $sth = $c->dbh->prepare($stmt);
   my $ret = $sth->execute or say $DBI::errstr;
+  return $ret;
+};
+
+helper trigger_user_deck => sub {
+  my $c = shift;
+  my $id = shift;
+  my $stmt = "
+    CREATE TRIGGER IF NOT EXISTS trigger_after_insert_user_deck_$id
+      AFTER INSERT ON user_deck_$id
+    BEGIN
+        UPDATE deck 
+               SET Count = (SELECT SUM(u.Count) FROM user_deck_$id u WHERE u.ID = new.ID)
+               WHERE ID IN (SELECT u.ID FROM user_deck_$id u WHERE u.ID= new.ID)
+    END;
+  ";
+  $sth = $c->dbh->prepare($stmt);
+  $ret = $sth->execute or say $DBI::errstr;
+  $stmt = "
+    CREATE TRIGGER IF NOT EXISTS trigger_after_update_user_deck_$id
+      AFTER UPDATE ON user_deck_$id
+      WHEN old.Count <> new.Count
+    BEGIN
+        UPDATE deck 
+               SET Count = (SELECT SUM(u.Count) FROM user_deck_$id u WHERE u.ID = new.ID)
+               WHERE ID IN (SELECT u.ID FROM user_deck_$id u WHERE u.ID= new.ID)
+    END;
+  ";
+  $sth = $c->dbh->prepare($stmt);
+  $ret = $sth->execute or say $DBI::errstr;
+  $stmt = "
+    CREATE TRIGGER IF NOT EXISTS trigger_after_delete_user_deck_$id
+      AFTER DELETE ON user_deck_$id
+    BEGIN
+        UPDATE deck 
+               SET Count = (SELECT SUM(u.Count) FROM user_deck_$id u WHERE u.ID = new.ID)
+               WHERE ID IN (SELECT u.ID FROM user_deck_$id u WHERE u.ID= new.ID)
+    END;
+  ";
+  $sth = $c->dbh->prepare($stmt);
+  $ret = $sth->execute or say $DBI::errstr;
+  $sth->finish();
   return $ret;
 };
 
