@@ -1351,36 +1351,56 @@ function addRow(jsonContent)
 const searchopt = {
   "Oracle" : 4,
   "ManaCost": 3,
-  "Type": 2,
-  "Name": 1
+  "Type": 2
+  //"Name": 1,
 }
 
-function search(key) {
+function search() {
   // Declare variables
   var input, filter, table, tr, td, i, txtValue;
-  input = document.getElementById("search"+key);
-  filter = input.value.toUpperCase();
   table = document.getElementById("collectionTable");
   tr = table.getElementsByTagName("tr");
 
-  // Loop through all table rows, and hide those who don't match the search query
+  console.log('initr search');
   for (i = 0; i < tr.length; i++) {
-    td = tr[i].getElementsByTagName("td")[searchopt[key]];
-    if (td) {
-      txtValue = td.textContent || td.innerText;
-      if (txtValue.toUpperCase().indexOf(filter) > -1) {
-        tr[i].style.display = "";
-      } else {
-        tr[i].style.display = "none";
+    console.log('initr search '+i);
+    var matched = [];
+    for (var key of Object.keys(searchopt)) {
+      td = tr[i].getElementsByTagName("td")[searchopt[key]];
+      if (td) {
+        console.log('found '+td);
+        txtValue = td.textContent || td.innerText;
+        input = document.getElementById("search"+key);
+        filter = input.value.toUpperCase();
+        //console.log(filter.replace(/([.?*+^$[\]\\(){}|-])/g, "\\$1"));
+        // Loop through all table rows, and hide those who don't match the search query
+          //new RegExp(filter.replace(/([.?*+^$[\]\\(){}|-])/g, "\\$1"))
+        if (txtValue.toUpperCase().search(
+            filter
+          ) > -1) {
+            matched.push(true);
+        } else {
+            matched.push(false);
+        }
       }
     }
-  }
+    console.log(matched);
+    console.log( matched.every(v => v === true));
+    if ( matched.every(v => v === true) ) {
+      tr[i].style.display = "";
+    } else {
+      tr[i].style.display = "none";
+    }
+  };
 };
 </script>
 
 <div style="position: fixed; top: 0; width: 100%; padding: 5px; margin-bottom: 25px;">
-<input type="text" id="searchType" onkeyup="search('Type')" placeholder="Search for type..">
-<input type="text" id="searchOracle" onkeyup="search('Oracle')" placeholder="Search for oracle..">
+<input type="text" id="searchType" placeholder="Search for type..">
+<input type="text" id="searchOracle" placeholder="Search for oracle..">
+%= label_for searchManaCost => 'Mana'
+%= select_field searchManaCost => ['', '{W}', '{U}', '{B}',  '{R}', '{E}', '{G}', '{C}','{\d}'], id => 'searchManaCost'
+%= input_tag Filter => 'Filter', type=>"button", onclick => 'search()'
 </div>
 <div style="padding-top: 25px;">
 <table id="collectionTable" style="width:100%">
