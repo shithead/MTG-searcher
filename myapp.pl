@@ -11,6 +11,7 @@ use Mojo::JSON qw(decode_json encode_json);
 use Text::CSV;
 use Crypt::PBKDF2;
 use List::Util qw(max);
+use Encode qw(decode encode);
 
 use DBI;
 
@@ -260,8 +261,8 @@ helper trigger_user_deck => sub {
                WHERE ID IN (SELECT u.ID FROM user_deck_$id u WHERE u.ID= new.ID)
     END;
   ";
-  $sth = $c->dbh->prepare($stmt);
-  $ret = $sth->execute or say $DBI::errstr;
+  my $sth = $c->dbh->prepare($stmt);
+  my $ret = $sth->execute or say $DBI::errstr;
   $stmt = "
     CREATE TRIGGER IF NOT EXISTS trigger_after_update_user_deck_$id
       AFTER UPDATE ON user_deck_$id
@@ -375,8 +376,9 @@ helper process_scrape => sub {
 
   my $xpath = 'div[class=toolbox-column] > ul[class=toolbox-links] > li > a > b';
   say "search on scryfall";
+  $name = decode('UTF-8', $name);
   my $res = $ua->max_redirects(2)->get("https://scryfall.com/search?q=$name")->result;
-  print "fetched anchore child \n";
+  say "fetched anchore child";
   my $toolboxLinks = $res->dom->find($xpath);
 
   # possible a grid
@@ -694,12 +696,15 @@ helper import_collection => sub($c, $collection) {
 
   my $subprocImportCollection = Mojo::IOLoop::Subprocess->new;
   my $promise = $subprocImportCollection->run_p( sub($subproc) {
-      my $csv = Text::CSV->new({ sep_char => ',' });
+      my $csv = Text::CSV->new({ 
+          binary => 1,
+          sep_char => ',' });
       my $sum = 0;
       my $matrix = {};
       my @lines = split('\n', $collection->slurp);
       foreach my $line (@lines) {
         chomp($line);
+        encode("UTF-8", $line);
         if ($csv->parse($line)) {
 
           my @fields = $csv->fields();
@@ -768,6 +773,18 @@ websocket '/watch/ws' =>  sub($c) {
   my $rows = $c->get_data($stmt);
   my $rows_size = max(keys %{$rows})+20;
 
+  # Increase inactivity timeout for connection a bit
+  $c->inactivity_timeout(360);
+  ## set timer before inactive timeoute
+  
+  my $healthCheckTimer = Mojo::IOLoop->timer( 350 => sub { 
+      my $msg = {
+        type => "ping",
+        data => "alive",
+        count => 0
+      };
+      $c->send(encode_json($msg));
+  });
   # Opened
   $c->app->log->debug('WebSocket opened');
   $c->on(open => sub($c, $msg){
@@ -779,10 +796,7 @@ websocket '/watch/ws' =>  sub($c) {
       $c->send(encode_json($msg));
 
     });
-  # Increase inactivity timeout for connection a bit
-  $c->inactivity_timeout(360);
 
-  # TODO not all data was print
   # Incoming message
   $c->on(message => sub ($c, $rcvmsg) {
       my $rmsg = decode_json($rcvmsg);
@@ -821,6 +835,9 @@ websocket '/watch/ws' =>  sub($c) {
       if ("$rmsg->{type}" eq "modifydeck") {
           $c->modify_deck($rmsg->{data});
       }
+      if ("$rmsg->{type}" eq "ping") {
+        Mojo::IOLoop->reactor->again($healthCheckTimer);
+      }
 
       $c->send(encode_json($msg));
     });
@@ -834,10 +851,6 @@ websocket '/watch/ws' =>  sub($c) {
 
 app->start;
 __DATA__
-
-@@ list.html.ep
-% layout 'default';
-% title 'Imports';
 
 @@ index.html.ep
 % layout 'default';
@@ -860,6 +873,21 @@ __DATA__
 <!DOCTYPE html>
 <html>
 <head>
+<link rel="stylesheet" href="https://www.w3schools.com/w3css/4/w3.css">
+<style>
+html {
+  max-width: 140ch;
+  padding: calc(1vmin + .5rem);
+  margin-inline: auto;
+  font-size: clamp(1em, 0.909em+0.45vmin, 1.25em);
+  font-family: system-ui;
+}
+
+body :not(:is(h1,h2,h3,h4,h5,h6)) {
+  line-hight: 1.75;
+}
+
+</style>
 <title><%= title %></title>
 <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 </head>
@@ -966,6 +994,11 @@ ws.onmessage = function (event) {
         checkboxChoice.dispatchEvent(event);
       }
     }
+  }
+  if ("ping" == json.type) {
+    msg.data = "alive";
+    msg.count = null;
+    ws.send(JSON.stringify(msg));
   }
 };
 
@@ -1296,7 +1329,8 @@ msg.type = json.type;
 msg.count = json.count;
 msg.data = null;
 if ("database" == json.type) {
-addRow(json.data);
+// addRow(json.data);
+addCardContainer(json.data, "cardGrid");
 ws.send(JSON.stringify(msg));
 }
 };
@@ -1348,6 +1382,61 @@ function addRow(jsonContent)
 
 };
 
+function addCardContainer(jsonContent, cardGrid) {
+  if (!document.getElementsByTagName) return;
+  if (!document.getElementById) return;
+  grid=document.getElementById(cardGrid);
+
+  for (i = 0; i < jsonContent.length; i++) {
+    card = document.createElement("div");
+    card.id = jsonContent[i].ID;
+    card.className = "w3-light-grey w3-col m6 l3 w3-row-padding";
+
+    Image = document.createElement("div");
+    Image.className = "w3-col m6 l6";
+    textImage = document.createElement("img");
+    textImage.src='data:image/jpg;base64,'+jsonContent[i].Image;
+    textImage.alt=jsonContent[i].Name;
+    Image.appendChild(textImage);
+    card.appendChild(Image);
+
+    info = document.createElement("div");
+    info.className = "w3-col m6 l6";
+    info.id = "infobox-"+jsonContent[i].ID;
+
+    cardName = document.createElement("div");
+    cardName.className = "w3-col m12 l12";
+    cardName.id = "cardname-"+jsonContent[i].ID;
+    cardName.appendChild(document.createTextNode(jsonContent[i].Name));
+    info.appendChild(cardName);
+
+    cardType = document.createElement("div");
+    cardType.className = "w3-col m8 l8";
+    //cardType.style = "font-size:1vw"
+    cardType.id = "cardtype-"+jsonContent[i].ID;
+    cardType.appendChild(document.createTextNode(jsonContent[i].Type.replace(/Ã¢ÂÂ/g,'-')));
+    info.appendChild(cardType);
+
+    manaCost = document.createElement("div");
+    manaCost.className = "w3-col m4 l4";
+    //manaCost.style = "font-size:1vw"
+    manaCost.id = "manacost-"+jsonContent[i].ID;
+    manaCost.appendChild(document.createTextNode(jsonContent[i].ManaCost));
+    info.appendChild(manaCost);
+
+    card.appendChild(info);
+
+    Oracle = document.createElement("div");
+    Oracle.className = "w3-col m12 l12";
+    Oracle.id = "oracle-"+jsonContent[i].ID;
+    Oracle.appendChild(document.createTextNode(jsonContent[i].Oracle.replace(/Ã¢ÂÂ/g,'-').replace(/Ã¢ÂÂ¢/g,'"')));
+    card.appendChild(Oracle);
+    grid.appendChild(card);
+  }
+
+}
+
+
 const searchopt = {
   "Oracle" : 4,
   "ManaCost": 3,
@@ -1373,10 +1462,10 @@ function search() {
         input = document.getElementById("search"+key);
         filter = input.value.toUpperCase();
         //console.log(filter.replace(/([.?*+^$[\]\\(){}|-])/g, "\\$1"));
+        console.log(filter);
         // Loop through all table rows, and hide those who don't match the search query
-          //new RegExp(filter.replace(/([.?*+^$[\]\\(){}|-])/g, "\\$1"))
         if (txtValue.toUpperCase().search(
-            filter
+          new RegExp(filter.replace(/(\/)/g, "\\$1"))
           ) > -1) {
             matched.push(true);
         } else {
@@ -1384,12 +1473,52 @@ function search() {
         }
       }
     }
-    console.log(matched);
-    console.log( matched.every(v => v === true));
     if ( matched.every(v => v === true) ) {
       tr[i].style.display = "";
     } else {
       tr[i].style.display = "none";
+    }
+  };
+};
+
+const searchgridopt = {
+  "Oracle" : 'oracle-',
+  "ManaCost": 'manacost-',
+  "Type": 'cardtype-'
+  //"Name": 1,
+}
+
+function searchGrid() {
+  // Declare variables
+  var input, filter, cardGrid, element, i, txtValue;
+  cardGrid = document.getElementById("cardGrid");
+
+  console.log('initr search '+cardGrid);
+  for (i = 1; i < cardGrid.childElementCount; i++) {
+    console.log('initr search '+i);
+    var matched = [];
+    for (var key of Object.keys(searchgridopt)) {
+      element = document.getElementById(searchgridopt[key]+i);
+      if (element) {
+        console.log('found '+element);
+        txtValue = element.textContent || element.innerText;
+        input = document.getElementById("search"+key);
+        filter = input.value.toUpperCase();
+        //console.log(filter.replace(/([.?*+^$[\]\\(){}|-])/g, "\\$1"));
+        // Loop through all table rows, and hide those who don't match the search query
+        if (txtValue.toUpperCase().search(
+          new RegExp(filter.replace(/(\/)/g, "\\$1"))
+          ) > -1) {
+            matched.push(true);
+        } else {
+            matched.push(false);
+        }
+      }
+    }
+    if ( matched.every(v => v === true) ) {
+      document.getElementById(i).style.display = "";
+    } else {
+      document.getElementById(i).style.display = "none";
     }
   };
 };
@@ -1400,18 +1529,9 @@ function search() {
 <input type="text" id="searchOracle" placeholder="Search for oracle..">
 %= label_for searchManaCost => 'Mana'
 %= select_field searchManaCost => ['', '{W}', '{U}', '{B}',  '{R}', '{E}', '{G}', '{C}','{\d}'], id => 'searchManaCost'
-%= input_tag Filter => 'Filter', type=>"button", onclick => 'search()'
+%= input_tag Filter => 'Filter', type=>"button", onclick => 'searchGrid()'
 </div>
 <div style="padding-top: 25px;">
-<table id="collectionTable" style="width:100%">
-<tr>
-<th scope="col">Image</th>
-<th scope="col">Name</th>
-<th scope="col">Type</th>
-<th scope="col">Mana Costs</th>
-<th scope="col">Oracle</th>
-</tr>
-<tbody id="cardTBody">
-</tbody>
-</table>
+<div id="cardGrid" class="w3-row">
+</div>
 </div>
