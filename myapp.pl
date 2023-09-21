@@ -1,9 +1,10 @@
-#!/usr/bin/env perl
+#!/usr/bin/env -S perl
 use Mojolicious::Lite -signatures;
 use lib qw(lib);
 #$r->get('/register')->to(
 #    controller => 'RegistrationController', action => 'register'
 #);
+#
 use MIME::Base64;
 use Mojo::IOLoop;
 use Mojo::UserAgent;
@@ -16,7 +17,6 @@ use Encode qw(decode encode);
 use DBI;
 
 use Data::Printer;
-
 
 plugin 'TagHelpers';
 
@@ -346,6 +346,7 @@ our $scrapeTimerID = Mojo::IOLoop->recurring(75 => sub ($loop) {
         );
       });
     $scrapeSubprocess->on(cleanup => sub ($subprocess) { say "Process $$ is about to exit" });
+    $scrapeSubprocess->on(error => sub ($msg) { say "Scraper Process Error: $msg" });
     # Fine grained response handling (dies on connection errors)
     $scrapeSubprocess = $scrapeSubprocess->run( sub ($subprocess) {
         # XXX autoconfigure  LIMIT from network speed
@@ -375,8 +376,8 @@ helper process_scrape => sub {
   $ua = $ua->connect_timeout(30)->request_timeout(45);
 
   my $xpath = 'div[class=toolbox-column] > ul[class=toolbox-links] > li > a > b';
-  say "search on scryfall";
   $name = decode('UTF-8', $name);
+  say "search on scryfall";
   my $res = $ua->max_redirects(2)->get("https://scryfall.com/search?q=$name")->result;
   say "fetched anchore child";
   my $toolboxLinks = $res->dom->find($xpath);

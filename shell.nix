@@ -11,6 +11,7 @@ let
     DataPrinter
     TextCSV
     DBDSQLite
+    IOSocketSSL
   ]);
   
 in
@@ -25,7 +26,7 @@ pkgs.mkShell {
   nativeBuildInputs = [
     makeWrapper
   ];
-  #PERL5LIB = with perlPackages; makeFullPerlPath [ DBI NetSSLeay CryptPBKDF2 Mojolicious DataPrinter TextCSV DBDSQLite ] ;
+  PERL5LIB = with perlPackages; makeFullPerlPath [ DBI NetSSLeay CryptPBKDF2 Mojolicious DataPrinter TextCSV DBDSQLite IOSocketSSL ] ;
     
   shellHook = ''
   '';
